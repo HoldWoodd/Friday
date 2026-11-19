@@ -636,7 +636,6 @@ def run(config: Config) -> None:
     last_positions: tuple[int, tuple[tuple[str, int], ...]] | None = None
     last_vol_source: str | None = None
     cached_volatility: tuple[int, float] | None = None
-    last_option_order_tick: int | None = None
     LOG.warning(
         "startup mode=%s; %s",
         "LIVE" if config.live else "DRY-RUN",
@@ -723,7 +722,7 @@ def run(config: Config) -> None:
                     volatility,
                     config,
                 )
-                if reduction and last_option_order_tick != tick:
+                if reduction:
                     ticker, action, quantity = reduction
                     LOG.warning(
                         "RISK REDUCTION %s %s x%d; post-hedge stressed Delta would be %.1f",
@@ -739,7 +738,6 @@ def run(config: Config) -> None:
                         OPTION_MAX_ORDER,
                         config.live,
                     )
-                    last_option_order_tick = tick
                     refresh_and_hedge(api, config, cached_volatility)
                 time.sleep(config.poll_seconds)
                 continue
@@ -758,38 +756,32 @@ def run(config: Config) -> None:
                 continue
 
             # The reports show late-case Gamma driving RTM to its hard limit.
-            # From this point onward, close one option position per tick.
+            # From this point onward, progressively close option positions.
             if tick >= config.unwind_start_tick:
-                if last_option_order_tick != tick:
-                    reduction = choose_reduction(
-                        options,
-                        stock_position,
-                        spot,
-                        years,
-                        rate,
-                        volatility,
-                        config,
+                reduction = choose_reduction(
+                    options,
+                    stock_position,
+                    spot,
+                    years,
+                    rate,
+                    volatility,
+                    config,
+                )
+                if reduction:
+                    ticker, action, quantity = reduction
+                    LOG.info("SCHEDULED UNWIND %s %s x%d", action, ticker, quantity)
+                    submit_chunks(
+                        api,
+                        ticker,
+                        quantity if action == "BUY" else -quantity,
+                        OPTION_MAX_ORDER,
+                        config.live,
                     )
-                    if reduction:
-                        ticker, action, quantity = reduction
-                        LOG.info("SCHEDULED UNWIND %s %s x%d", action, ticker, quantity)
-                        submit_chunks(
-                            api,
-                            ticker,
-                            quantity if action == "BUY" else -quantity,
-                            OPTION_MAX_ORDER,
-                            config.live,
-                        )
-                        last_option_order_tick = tick
-                        refresh_and_hedge(api, config, cached_volatility)
-                    elif stock_position:
-                        submit_chunks(
-                            api, "RTM", -stock_position, ETF_MAX_ORDER, config.live
-                        )
-                time.sleep(config.poll_seconds)
-                continue
-
-            if last_option_order_tick == tick:
+                    refresh_and_hedge(api, config, cached_volatility)
+                elif stock_position:
+                    submit_chunks(
+                        api, "RTM", -stock_position, ETF_MAX_ORDER, config.live
+                    )
                 time.sleep(config.poll_seconds)
                 continue
 
@@ -827,7 +819,6 @@ def run(config: Config) -> None:
                     submit_chunks(
                         api, best.ticker, signed_quantity, OPTION_MAX_ORDER, config.live
                     )
-                    last_option_order_tick = tick
                     refresh_and_hedge(api, config, cached_volatility)
                 else:
                     LOG.info(
@@ -854,20 +845,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--live", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--base-url", default="http://localhost:9999/v1")
     parser.add_argument("--api-key", default=os.getenv("RIT_API_KEY", "Rotman"))
-    parser.add_argument("--poll-seconds", type=float, default=1.0)
-    parser.add_argument("--option-order-size", type=positive_int, default=5)
-    parser.add_argument("--min-profit", type=float, default=10.0, help="minimum estimated dollars per contract after immediate fees")
-    parser.add_argument("--hedge-trigger", type=float, default=1_000.0)
+    parser.add_argument("--poll-seconds", type=float, default=0.5)
+    parser.add_argument("--option-order-size", type=positive_int, default=10)
+    parser.add_argument("--min-profit", type=float, default=8.0, help="minimum estimated dollars per contract after immediate fees")
+    parser.add_argument("--hedge-trigger", type=float, default=1_500.0)
     parser.add_argument("--hedge-target", type=float, default=0.0)
     parser.add_argument("--delta-buffer", type=float, default=3_000.0)
-    parser.add_argument("--per-ticker-limit", type=positive_int, default=100)
-    parser.add_argument("--option-gross-soft-limit", type=positive_int, default=1_500)
-    parser.add_argument("--option-net-soft-limit", type=positive_int, default=500)
-    parser.add_argument("--etf-soft-limit", type=positive_int, default=40_000)
-    parser.add_argument("--risk-stop", type=float, default=3_500.0)
-    parser.add_argument("--unwind-start-tick", type=int, default=225)
+    parser.add_argument("--per-ticker-limit", type=positive_int, default=200)
+    parser.add_argument("--option-gross-soft-limit", type=positive_int, default=2_200)
+    parser.add_argument("--option-net-soft-limit", type=positive_int, default=800)
+    parser.add_argument("--etf-soft-limit", type=positive_int, default=42_500)
+    parser.add_argument("--risk-stop", type=float, default=4_500.0)
+    parser.add_argument("--unwind-start-tick", type=int, default=250)
     parser.add_argument("--unwind-order-size", type=positive_int, default=25)
-    parser.add_argument("--spot-stress-percent", type=float, default=1.0, help="Delta stress move in percent")
+    parser.add_argument("--spot-stress-percent", type=float, default=0.5, help="Delta stress move in percent")
     parser.add_argument("--risk-free-percent", type=float, default=None)
     parser.add_argument("--vol-percent", type=float, default=None, help="override news with an annualized percentage, e.g. 20")
     parser.add_argument("--request-timeout", type=float, default=2.0)

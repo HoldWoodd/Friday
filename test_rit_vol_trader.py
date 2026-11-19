@@ -147,12 +147,15 @@ class NewsTests(unittest.TestCase):
 class RiskTests(unittest.TestCase):
     def test_safer_defaults_from_two_case_review(self):
         config = config_from_args(build_parser().parse_args([]))
-        self.assertEqual(config.poll_seconds, 1.0)
-        self.assertEqual(config.option_order_size, 5)
-        self.assertEqual(config.hedge_trigger, 1000)
-        self.assertEqual(config.etf_soft_limit, 40_000)
-        self.assertEqual(config.option_net_soft_limit, 500)
-        self.assertEqual(config.unwind_start_tick, 225)
+        self.assertEqual(config.poll_seconds, 0.5)
+        self.assertEqual(config.option_order_size, 10)
+        self.assertEqual(config.hedge_trigger, 1500)
+        self.assertEqual(config.etf_soft_limit, 42_500)
+        self.assertEqual(config.option_net_soft_limit, 800)
+        self.assertEqual(config.per_ticker_limit, 200)
+        self.assertEqual(config.option_gross_soft_limit, 2200)
+        self.assertEqual(config.risk_stop, 4500)
+        self.assertEqual(config.unwind_start_tick, 250)
 
     def test_option_capacity_obeys_gross_and_net(self):
         options = [
