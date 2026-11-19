@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""First-pass automated trader for the RITCx Volatility Trading Case.
+"""Risk-controlled automated trader for the RITCx Volatility Trading Case.
 
 The default mode sends orders. Pass --dry-run for read-only signal testing.
 """
@@ -14,7 +14,7 @@ import re
 import signal
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 import requests
@@ -58,6 +58,14 @@ class Config:
     rate_override: float | None
     vol_override: float | None
     request_timeout: float
+    per_ticker_limit: int
+    option_gross_soft_limit: int
+    option_net_soft_limit: int
+    etf_soft_limit: int
+    risk_stop: float
+    unwind_start_tick: int
+    unwind_order_size: int
+    spot_stress_percent: float
 
 
 @dataclass(frozen=True)
@@ -164,6 +172,35 @@ def black_scholes(
     raise ValueError(f"unknown option kind: {kind}")
 
 
+def implied_volatility(
+    kind: str,
+    price: float,
+    spot: float,
+    strike: float,
+    years: float,
+    rate: float,
+) -> float | None:
+    """Invert Black–Scholes with a bounded bisection search."""
+    if price <= 0 or years <= 0:
+        return None
+    intrinsic, _ = black_scholes(kind, spot, strike, 0.0, rate, 0.0)
+    if price < intrinsic - 1e-6:
+        return None
+    low, high = 0.001, 3.0
+    low_price, _ = black_scholes(kind, spot, strike, years, rate, low)
+    high_price, _ = black_scholes(kind, spot, strike, years, rate, high)
+    if not low_price <= price <= high_price:
+        return None
+    for _ in range(60):
+        mid = (low + high) / 2.0
+        mid_price, _ = black_scholes(kind, spot, strike, years, rate, mid)
+        if mid_price < price:
+            low = mid
+        else:
+            high = mid
+    return (low + high) / 2.0
+
+
 def years_remaining(tick: int) -> float:
     # The 300-second case represents 20/240 = 1/12 trading years.
     remaining_fraction = max(CASE_TICKS - tick, 0) / CASE_TICKS
@@ -260,6 +297,66 @@ def portfolio_delta(
     return exposure
 
 
+def portfolio_delta_bounds(
+    stock_position: int,
+    options: Iterable[OptionQuote],
+    spot: float,
+    years: float,
+    rate: float,
+    forecast_volatility: float,
+    spot_stress_percent: float,
+) -> tuple[float, float]:
+    """Conservative Delta interval across forecast IV, market IV and spot shocks."""
+    option_list = list(options)
+    market_vols: dict[str, float] = {}
+    for option in option_list:
+        mid = (option.bid + option.ask) / 2.0
+        market_vols[option.ticker] = (
+            implied_volatility(
+                option.kind, mid, spot, option.strike, years, rate
+            )
+            or forecast_volatility
+        )
+
+    scenarios: list[float] = []
+    for shock in (-spot_stress_percent, 0.0, spot_stress_percent):
+        stressed_spot = spot * (1.0 + shock)
+        for use_market_vol in (False, True):
+            exposure = float(stock_position)
+            for option in option_list:
+                volatility = (
+                    market_vols[option.ticker]
+                    if use_market_vol
+                    else forecast_volatility
+                )
+                _, option_delta = black_scholes(
+                    option.kind,
+                    stressed_spot,
+                    option.strike,
+                    years,
+                    rate,
+                    volatility,
+                )
+                exposure += option.position * option_delta * OPTION_MULTIPLIER
+            scenarios.append(exposure)
+    return min(scenarios), max(scenarios)
+
+
+def worst_delta(bounds: tuple[float, float]) -> float:
+    return max(abs(bounds[0]), abs(bounds[1]))
+
+
+def hedge_for_bounds(
+    stock_position: int, bounds: tuple[float, float], etf_soft_limit: int
+) -> int:
+    """Center the Delta interval while retaining ETF capacity for future shocks."""
+    midpoint = (bounds[0] + bounds[1]) / 2.0
+    desired_change = int(round(-midpoint))
+    desired_stock = stock_position + desired_change
+    desired_stock = max(-etf_soft_limit, min(etf_soft_limit, desired_stock))
+    return desired_stock - stock_position
+
+
 def find_candidates(
     options: Iterable[OptionQuote],
     spot: float,
@@ -297,6 +394,122 @@ def option_capacity(options: Iterable[OptionQuote], action: str) -> int:
     net = sum(positions)
     net_remaining = OPTION_NET_LIMIT - net if action == "BUY" else OPTION_NET_LIMIT + net
     return max(0, min(gross_remaining, net_remaining))
+
+
+def soft_option_capacity(
+    options: Iterable[OptionQuote],
+    ticker: str,
+    action: str,
+    config: Config,
+) -> int:
+    """Capacity under both case limits and conservative strategy limits."""
+    option_list = list(options)
+    target = next(option for option in option_list if option.ticker == ticker)
+    direction = 1 if action == "BUY" else -1
+    current_gross = sum(abs(option.position) for option in option_list)
+    current_net = sum(option.position for option in option_list)
+    capacity = 0
+    for quantity in range(1, min(config.option_order_size, OPTION_MAX_ORDER) + 1):
+        new_position = target.position + direction * quantity
+        new_gross = current_gross - abs(target.position) + abs(new_position)
+        new_net = current_net + direction * quantity
+        within_hard = new_gross <= OPTION_GROSS_LIMIT and abs(new_net) <= OPTION_NET_LIMIT
+        # Always permit a step that reduces an already excessive risk metric.
+        within_soft = (
+            (abs(new_position) <= config.per_ticker_limit or abs(new_position) < abs(target.position))
+            and (new_gross <= config.option_gross_soft_limit or new_gross < current_gross)
+            and (abs(new_net) <= config.option_net_soft_limit or abs(new_net) < abs(current_net))
+        )
+        if within_hard and within_soft:
+            capacity = quantity
+        else:
+            break
+    return capacity
+
+
+def projected_options(
+    options: Iterable[OptionQuote], ticker: str, action: str, quantity: int
+) -> list[OptionQuote]:
+    direction = 1 if action == "BUY" else -1
+    return [
+        replace(option, position=option.position + direction * quantity)
+        if option.ticker == ticker
+        else option
+        for option in options
+    ]
+
+
+def safest_candidate_quantity(
+    options: Iterable[OptionQuote],
+    candidate: Candidate,
+    stock_position: int,
+    spot: float,
+    years: float,
+    rate: float,
+    volatility: float,
+    config: Config,
+) -> int:
+    """Size a trade only if it remains hedgeable inside conservative limits."""
+    option_list = list(options)
+    capacity = soft_option_capacity(
+        option_list, candidate.ticker, candidate.action, config
+    )
+    safe = 0
+    for quantity in range(1, capacity + 1):
+        projected = projected_options(
+            option_list, candidate.ticker, candidate.action, quantity
+        )
+        bounds = portfolio_delta_bounds(
+            stock_position,
+            projected,
+            spot,
+            years,
+            rate,
+            volatility,
+            config.spot_stress_percent,
+        )
+        hedge = hedge_for_bounds(stock_position, bounds, config.etf_soft_limit)
+        hedged_bounds = (bounds[0] + hedge, bounds[1] + hedge)
+        if worst_delta(hedged_bounds) <= config.risk_stop:
+            safe = quantity
+    return safe
+
+
+def choose_reduction(
+    options: Iterable[OptionQuote],
+    stock_position: int,
+    spot: float,
+    years: float,
+    rate: float,
+    volatility: float,
+    config: Config,
+) -> tuple[str, str, int] | None:
+    """Choose the position reduction with the best stressed-Delta improvement."""
+    option_list = list(options)
+    best: tuple[float, str, str, int] | None = None
+    for option in option_list:
+        if option.position == 0:
+            continue
+        quantity = min(abs(option.position), config.unwind_order_size)
+        action = "SELL" if option.position > 0 else "BUY"
+        projected = projected_options(option_list, option.ticker, action, quantity)
+        bounds = portfolio_delta_bounds(
+            stock_position,
+            projected,
+            spot,
+            years,
+            rate,
+            volatility,
+            config.spot_stress_percent,
+        )
+        hedge = hedge_for_bounds(stock_position, bounds, config.etf_soft_limit)
+        score = worst_delta((bounds[0] + hedge, bounds[1] + hedge))
+        proposal = (score, option.ticker, action, quantity)
+        if best is None or proposal[0] < best[0]:
+            best = proposal
+    if best is None:
+        return None
+    return best[1], best[2], best[3]
 
 
 def delta_safe_quantity(
@@ -380,12 +593,50 @@ def read_state(
     return tick, spot, volatility, source, underlying, options
 
 
+def refresh_and_hedge(
+    api: RitApi,
+    config: Config,
+    cached_volatility: tuple[int, float] | None,
+) -> None:
+    """Refresh actual fills, then hedge immediately when the risk band requires it."""
+    if not config.live:
+        return
+    time.sleep(0.05)
+    tick, spot, volatility, _, underlying, options = read_state(
+        api, config, cached_volatility
+    )
+    years = years_remaining(tick)
+    rate = effective_rate(underlying, config.rate_override)
+    stock_position = int(underlying.get("position", 0) or 0)
+    bounds = portfolio_delta_bounds(
+        stock_position,
+        options,
+        spot,
+        years,
+        rate,
+        volatility,
+        config.spot_stress_percent,
+    )
+    if worst_delta(bounds) < config.hedge_trigger:
+        return
+    change = hedge_for_bounds(stock_position, bounds, config.etf_soft_limit)
+    if change:
+        LOG.info(
+            "IMMEDIATE HEDGE delta_range=[%.1f, %.1f] RTM_change=%d",
+            bounds[0],
+            bounds[1],
+            change,
+        )
+        submit_chunks(api, "RTM", change, ETF_MAX_ORDER, True)
+
+
 def run(config: Config) -> None:
     api = RitApi(config)
     last_summary_tick: int | None = None
     last_positions: tuple[int, tuple[tuple[str, int], ...]] | None = None
     last_vol_source: str | None = None
     cached_volatility: tuple[int, float] | None = None
+    last_option_order_tick: int | None = None
     LOG.warning(
         "startup mode=%s; %s",
         "LIVE" if config.live else "DRY-RUN",
@@ -412,16 +663,27 @@ def run(config: Config) -> None:
             delta_now = portfolio_delta(
                 stock_position, options, spot, years, rate, volatility
             )
+            delta_bounds = portfolio_delta_bounds(
+                stock_position,
+                options,
+                spot,
+                years,
+                rate,
+                volatility,
+                config.spot_stress_percent,
+            )
 
             if tick != last_summary_tick:
                 LOG.info(
-                    "tick=%d week=%d RTM=%.2f vol=%.2f%%(%s) delta=%.1f stock=%d option_gross=%d option_net=%d mode=%s",
+                    "tick=%d week=%d RTM=%.2f vol=%.2f%%(%s) model_delta=%.1f risk_delta=[%.1f,%.1f] stock=%d option_gross=%d option_net=%d mode=%s",
                     tick,
                     case_week(tick),
                     spot,
                     volatility * 100.0,
                     vol_source,
                     delta_now,
+                    delta_bounds[0],
+                    delta_bounds[1],
                     stock_position,
                     option_gross,
                     option_net,
@@ -444,11 +706,90 @@ def run(config: Config) -> None:
                 )
                 last_positions = positions
 
-            if abs(delta_now) >= config.hedge_trigger:
-                target = math.copysign(config.hedge_target, delta_now) if config.hedge_target else 0.0
-                change = hedge_quantity(stock_position, delta_now, target)
+            hedge = hedge_for_bounds(
+                stock_position, delta_bounds, config.etf_soft_limit
+            )
+            hedged_bounds = (delta_bounds[0] + hedge, delta_bounds[1] + hedge)
+
+            # If even the best ETF hedge inside the soft limit cannot control
+            # stressed Delta, reduce options rather than pinning RTM at 50,000.
+            if worst_delta(hedged_bounds) > config.risk_stop:
+                reduction = choose_reduction(
+                    options,
+                    stock_position,
+                    spot,
+                    years,
+                    rate,
+                    volatility,
+                    config,
+                )
+                if reduction and last_option_order_tick != tick:
+                    ticker, action, quantity = reduction
+                    LOG.warning(
+                        "RISK REDUCTION %s %s x%d; post-hedge stressed Delta would be %.1f",
+                        action,
+                        ticker,
+                        quantity,
+                        worst_delta(hedged_bounds),
+                    )
+                    submit_chunks(
+                        api,
+                        ticker,
+                        quantity if action == "BUY" else -quantity,
+                        OPTION_MAX_ORDER,
+                        config.live,
+                    )
+                    last_option_order_tick = tick
+                    refresh_and_hedge(api, config, cached_volatility)
+                time.sleep(config.poll_seconds)
+                continue
+
+            if worst_delta(delta_bounds) >= config.hedge_trigger:
+                change = hedge
                 if change:
+                    LOG.info(
+                        "HEDGE risk_delta=[%.1f, %.1f] RTM_change=%d",
+                        delta_bounds[0],
+                        delta_bounds[1],
+                        change,
+                    )
                     submit_chunks(api, "RTM", change, ETF_MAX_ORDER, config.live)
+                time.sleep(config.poll_seconds)
+                continue
+
+            # The reports show late-case Gamma driving RTM to its hard limit.
+            # From this point onward, close one option position per tick.
+            if tick >= config.unwind_start_tick:
+                if last_option_order_tick != tick:
+                    reduction = choose_reduction(
+                        options,
+                        stock_position,
+                        spot,
+                        years,
+                        rate,
+                        volatility,
+                        config,
+                    )
+                    if reduction:
+                        ticker, action, quantity = reduction
+                        LOG.info("SCHEDULED UNWIND %s %s x%d", action, ticker, quantity)
+                        submit_chunks(
+                            api,
+                            ticker,
+                            quantity if action == "BUY" else -quantity,
+                            OPTION_MAX_ORDER,
+                            config.live,
+                        )
+                        last_option_order_tick = tick
+                        refresh_and_hedge(api, config, cached_volatility)
+                    elif stock_position:
+                        submit_chunks(
+                            api, "RTM", -stock_position, ETF_MAX_ORDER, config.live
+                        )
+                time.sleep(config.poll_seconds)
+                continue
+
+            if last_option_order_tick == tick:
                 time.sleep(config.poll_seconds)
                 continue
 
@@ -462,11 +803,16 @@ def run(config: Config) -> None:
             )
             if candidates:
                 best = candidates[0]
-                capacity = option_capacity(options, best.action)
-                safe_quantity = delta_safe_quantity(
-                    delta_now, best.option_delta, best.action, config.delta_buffer
+                quantity = safest_candidate_quantity(
+                    options,
+                    best,
+                    stock_position,
+                    spot,
+                    years,
+                    rate,
+                    volatility,
+                    config,
                 )
-                quantity = min(config.option_order_size, OPTION_MAX_ORDER, capacity, safe_quantity)
                 if quantity > 0:
                     signed_quantity = quantity if best.action == "BUY" else -quantity
                     LOG.info(
@@ -480,6 +826,14 @@ def run(config: Config) -> None:
                     )
                     submit_chunks(
                         api, best.ticker, signed_quantity, OPTION_MAX_ORDER, config.live
+                    )
+                    last_option_order_tick = tick
+                    refresh_and_hedge(api, config, cached_volatility)
+                else:
+                    LOG.info(
+                        "signal %s %s blocked by soft limits or stressed-Delta hedge capacity",
+                        best.action,
+                        best.ticker,
                     )
             time.sleep(config.poll_seconds)
         except ApiError as exc:
@@ -500,12 +854,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--live", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--base-url", default="http://localhost:9999/v1")
     parser.add_argument("--api-key", default=os.getenv("RIT_API_KEY", "Rotman"))
-    parser.add_argument("--poll-seconds", type=float, default=0.5)
-    parser.add_argument("--option-order-size", type=positive_int, default=25)
-    parser.add_argument("--min-profit", type=float, default=3.0, help="minimum estimated dollars per contract after immediate fees")
-    parser.add_argument("--hedge-trigger", type=float, default=3_500.0)
-    parser.add_argument("--hedge-target", type=float, default=500.0)
-    parser.add_argument("--delta-buffer", type=float, default=1_000.0)
+    parser.add_argument("--poll-seconds", type=float, default=1.0)
+    parser.add_argument("--option-order-size", type=positive_int, default=5)
+    parser.add_argument("--min-profit", type=float, default=10.0, help="minimum estimated dollars per contract after immediate fees")
+    parser.add_argument("--hedge-trigger", type=float, default=1_000.0)
+    parser.add_argument("--hedge-target", type=float, default=0.0)
+    parser.add_argument("--delta-buffer", type=float, default=3_000.0)
+    parser.add_argument("--per-ticker-limit", type=positive_int, default=100)
+    parser.add_argument("--option-gross-soft-limit", type=positive_int, default=1_500)
+    parser.add_argument("--option-net-soft-limit", type=positive_int, default=500)
+    parser.add_argument("--etf-soft-limit", type=positive_int, default=40_000)
+    parser.add_argument("--risk-stop", type=float, default=3_500.0)
+    parser.add_argument("--unwind-start-tick", type=int, default=225)
+    parser.add_argument("--unwind-order-size", type=positive_int, default=25)
+    parser.add_argument("--spot-stress-percent", type=float, default=1.0, help="Delta stress move in percent")
     parser.add_argument("--risk-free-percent", type=float, default=None)
     parser.add_argument("--vol-percent", type=float, default=None, help="override news with an annualized percentage, e.g. 20")
     parser.add_argument("--request-timeout", type=float, default=2.0)
@@ -526,6 +888,22 @@ def config_from_args(args: argparse.Namespace) -> Config:
         raise SystemExit("poll interval and request timeout must be positive")
     if args.vol_percent is not None and args.vol_percent <= 0:
         raise SystemExit("--vol-percent must be positive")
+    if not 0 < args.per_ticker_limit <= OPTION_GROSS_LIMIT:
+        raise SystemExit("--per-ticker-limit must be in (0, 2500]")
+    if not 0 < args.option_gross_soft_limit <= OPTION_GROSS_LIMIT:
+        raise SystemExit("--option-gross-soft-limit must be in (0, 2500]")
+    if not 0 < args.option_net_soft_limit <= OPTION_NET_LIMIT:
+        raise SystemExit("--option-net-soft-limit must be in (0, 1000]")
+    if not 0 < args.etf_soft_limit < ETF_POSITION_LIMIT:
+        raise SystemExit("--etf-soft-limit must be in (0, 50000)")
+    if not args.hedge_trigger < args.risk_stop < DELTA_HARD_LIMIT:
+        raise SystemExit("require hedge-trigger < risk-stop < 7000")
+    if not 1 <= args.unwind_start_tick < CASE_TICKS:
+        raise SystemExit("--unwind-start-tick must be between 1 and 299")
+    if not 0 < args.unwind_order_size <= OPTION_MAX_ORDER:
+        raise SystemExit("--unwind-order-size must be between 1 and 100")
+    if not 0 < args.spot_stress_percent <= 10:
+        raise SystemExit("--spot-stress-percent must be in (0, 10]")
     return Config(
         base_url=args.base_url,
         api_key=args.api_key,
@@ -539,6 +917,14 @@ def config_from_args(args: argparse.Namespace) -> Config:
         rate_override=None if args.risk_free_percent is None else args.risk_free_percent / 100.0,
         vol_override=None if args.vol_percent is None else args.vol_percent / 100.0,
         request_timeout=args.request_timeout,
+        per_ticker_limit=args.per_ticker_limit,
+        option_gross_soft_limit=args.option_gross_soft_limit,
+        option_net_soft_limit=args.option_net_soft_limit,
+        etf_soft_limit=args.etf_soft_limit,
+        risk_stop=args.risk_stop,
+        unwind_start_tick=args.unwind_start_tick,
+        unwind_order_size=args.unwind_order_size,
+        spot_stress_percent=args.spot_stress_percent / 100.0,
     )
 
 

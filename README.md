@@ -1,4 +1,4 @@
-# RITCx Volatility Trading Case — first-pass trader
+# RITCx Volatility Trading Case — risk-controlled trader
 
 This Python script connects to the RIT Client REST API, values the RTM European
 options with Black–Scholes, looks for executable mispricing, observes the case
@@ -14,8 +14,10 @@ real market orders. Pass `--dry-run` for read-only signal testing.
 - Maximum order: 100 option contracts or 10,000 RTM shares.
 - Options: gross position limit 2,500; net position limit 1,000.
 - RTM position limit: 50,000 shares.
-- Hard portfolio Delta boundary: ±7,000; the default internal hedge trigger is
-  ±3,500 with a target of ±500.
+- Hard portfolio Delta boundary: ±7,000. The default internal hedge trigger is
+  ±1,000 and new positions must keep stressed post-hedge Delta within ±3,500.
+- Strategy soft limits preserve emergency capacity: ±40,000 RTM shares, 1,500
+  option gross, ±500 option net, and ±100 contracts per ticker.
 - Risk-free rate comes from the RTM security record and can be overridden.
 - The script only trades a current-week volatility value found in news, unless
   the operator explicitly supplies `--vol-percent`. A successfully parsed value
@@ -25,6 +27,14 @@ real market orders. Pass `--dry-run` for read-only signal testing.
   publish a week's announcement immediately before that week begins.
 - Every loop reads actual RTM and option positions from `/securities`. Logs show
   stock position, nonzero option positions, option gross/net and portfolio Delta.
+- Risk Delta is a range across analyst volatility, market implied volatility,
+  and ±1% RTM spot shocks. ETF hedging centers this range rather than relying on
+  one optimistic Delta estimate.
+- At most one option order is submitted per tick. A live option fill is followed
+  by an immediate position refresh and RTM hedge when required.
+- If ETF hedge capacity is insufficient, the strategy reduces options instead
+  of pinning RTM at its 50,000-share hard limit. From tick 225 onward it stops
+  opening risk and progressively unwinds options.
 
 ## Installation
 
@@ -77,10 +87,11 @@ Useful conservative controls:
 
 ```bash
 python rit_vol_trader.py \
-  --option-order-size 10 \
-  --min-profit 5 \
-  --hedge-trigger 3000 \
-  --hedge-target 500
+  --option-order-size 5 \
+  --min-profit 10 \
+  --hedge-trigger 1000 \
+  --risk-stop 3500 \
+  --etf-soft-limit 40000
 ```
 
 `--min-profit` is estimated dollars per option contract after the $2 option
@@ -94,15 +105,16 @@ profit and does not include every possible future re-hedge or exit cost.
 - The first version uses the current week's announced volatility as a constant
   Black–Scholes volatility for the remaining maturity. It records neither a
   forward weekly variance curve nor the next-week range.
-- It sends market orders. There is no limit-order market making, order-book
-  queue model, or fill reconciliation beyond refreshing positions next loop.
+- It sends market orders. There is no limit-order market making or order-book
+  queue model. Market orders are refreshed immediately, but there is no complete
+  partial-fill/pending-order state machine.
 - It estimates only the immediate option fee and first Delta hedge fee. Future
   re-hedges, closing costs, volatility uncertainty, and slippage are not fully
   modeled.
 - It ranks single option legs. It does not construct straddles, strangles,
   spreads, conversions, reversals, or optimize a portfolio across strikes.
-- Delta is recomputed every loop, but Gamma, Vega, Theta and stress losses are
-  not constrained.
+- Delta is stressed against spot and volatility, but Gamma, Vega, Theta and
+  total stress P&L are not separately constrained.
 - REST requests and orders are sequential. There is no atomic option-and-hedge
   transaction, so brief residual Delta can exist between fills.
 - The strategy has unit tests but cannot be end-to-end tested without a running
@@ -111,10 +123,8 @@ profit and does not include every possible future re-hedge or exit cost.
 ## Natural next improvements
 
 1. Parse current and next-week forecasts into a weekly forward-variance curve.
-2. Add implied-volatility inversion and compare market IV directly to the
-   analyst forecast with confidence bands.
-3. Optimize multi-leg trades by net Vega, Gamma, Delta, fees and position limits.
-4. Add fill-aware order tracking, cancellation and controlled limit orders.
-5. Add Gamma-aware adaptive hedging instead of a fixed Delta band.
-6. Record ticks, news, quotes, signals and fills for replay/backtesting.
-7. Build a simulator/replay harness and calibrate thresholds from repeated cases.
+2. Optimize multi-leg trades by net Vega, Gamma, Delta, fees and position limits.
+3. Add complete fill-aware order tracking, cancellation and controlled limit orders.
+4. Add Gamma-aware adaptive hedging instead of a fixed Delta band.
+5. Record ticks, news, quotes, signals and fills for replay/backtesting.
+6. Build a simulator/replay harness and calibrate thresholds from repeated cases.

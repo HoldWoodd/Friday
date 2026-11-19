@@ -1,4 +1,3 @@
-import math
 import unittest
 
 from rit_vol_trader import (
@@ -7,16 +6,49 @@ from rit_vol_trader import (
     Candidate,
     OptionQuote,
     black_scholes,
+    build_parser,
     case_week,
+    config_from_args,
     delta_safe_quantity,
     find_candidates,
+    hedge_for_bounds,
     hedge_quantity,
+    implied_volatility,
     option_capacity,
     portfolio_delta,
+    portfolio_delta_bounds,
     read_state,
+    soft_option_capacity,
     volatility_from_news,
     years_remaining,
 )
+
+
+def make_config(**overrides):
+    values = dict(
+        base_url="http://localhost",
+        api_key="test",
+        live=False,
+        poll_seconds=1,
+        option_order_size=5,
+        min_profit_per_contract=10,
+        hedge_trigger=1000,
+        hedge_target=0,
+        delta_buffer=3000,
+        rate_override=0,
+        vol_override=None,
+        request_timeout=1,
+        per_ticker_limit=100,
+        option_gross_soft_limit=1500,
+        option_net_soft_limit=500,
+        etf_soft_limit=40_000,
+        risk_stop=3500,
+        unwind_start_tick=225,
+        unwind_order_size=25,
+        spot_stress_percent=0.01,
+    )
+    values.update(overrides)
+    return Config(**values)
 
 
 class ModelTests(unittest.TestCase):
@@ -42,6 +74,11 @@ class ModelTests(unittest.TestCase):
         _, delta = black_scholes("C", 50, 50, 1 / 12, 0, 0.20)
         result = portfolio_delta(100, options, 50, 1 / 12, 0, 0.20)
         self.assertAlmostEqual(result, 100 + 10 * delta * 100)
+
+    def test_implied_volatility_recovers_input(self):
+        price, _ = black_scholes("C", 50, 50, 1 / 12, 0, 0.20)
+        result = implied_volatility("C", price, 50, 50, 1 / 12, 0)
+        self.assertAlmostEqual(result, 0.20, places=6)
 
 
 class NewsTests(unittest.TestCase):
@@ -98,20 +135,7 @@ class NewsTests(unittest.TestCase):
             def news(self):
                 return []
 
-        config = Config(
-            base_url="http://localhost",
-            api_key="test",
-            live=False,
-            poll_seconds=1,
-            option_order_size=1,
-            min_profit_per_contract=1,
-            hedge_trigger=3000,
-            hedge_target=500,
-            delta_buffer=1000,
-            rate_override=0,
-            vol_override=None,
-            request_timeout=1,
-        )
+        config = make_config()
         _, _, volatility, source, _, _ = read_state(FakeApi(), config, (3, 0.28))
         self.assertEqual(volatility, 0.28)
         self.assertEqual(source, "cache")
@@ -121,6 +145,15 @@ class NewsTests(unittest.TestCase):
 
 
 class RiskTests(unittest.TestCase):
+    def test_safer_defaults_from_two_case_review(self):
+        config = config_from_args(build_parser().parse_args([]))
+        self.assertEqual(config.poll_seconds, 1.0)
+        self.assertEqual(config.option_order_size, 5)
+        self.assertEqual(config.hedge_trigger, 1000)
+        self.assertEqual(config.etf_soft_limit, 40_000)
+        self.assertEqual(config.option_net_soft_limit, 500)
+        self.assertEqual(config.unwind_start_tick, 225)
+
     def test_option_capacity_obeys_gross_and_net(self):
         options = [
             OptionQuote("RTM48C", 48, "C", 1, 1.02, 900),
@@ -143,6 +176,25 @@ class RiskTests(unittest.TestCase):
         self.assertTrue(candidates)
         self.assertEqual(candidates[0].action, "BUY")
         self.assertGreater(candidates[0].edge_per_contract, 1.0)
+
+    def test_soft_capacity_prevents_ticker_concentration(self):
+        options = [OptionQuote("RTM50C", 50, "C", 1, 1.02, 98)]
+        self.assertEqual(
+            soft_option_capacity(options, "RTM50C", "BUY", make_config()), 2
+        )
+
+    def test_soft_capacity_allows_reducing_excess(self):
+        options = [OptionQuote("RTM50C", 50, "C", 1, 1.02, 120)]
+        self.assertEqual(
+            soft_option_capacity(options, "RTM50C", "SELL", make_config()), 5
+        )
+
+    def test_stressed_delta_bounds_and_soft_etf_limit(self):
+        options = [OptionQuote("RTM50C", 50, "C", 1.10, 1.12, -100)]
+        bounds = portfolio_delta_bounds(0, options, 50, 1 / 12, 0, 0.20, 0.01)
+        self.assertLess(bounds[0], bounds[1])
+        change = hedge_for_bounds(39_000, (-10_000, -8_000), 40_000)
+        self.assertEqual(change, 1_000)
 
 
 if __name__ == "__main__":
