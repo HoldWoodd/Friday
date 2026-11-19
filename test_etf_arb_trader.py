@@ -12,6 +12,7 @@ from etf_arb_trader import (
     config_from_args,
     discovered_limits,
     find_opportunities,
+    process_tenders,
     projected_positions,
     tender_opportunity,
     weighted_exposure,
@@ -78,6 +79,41 @@ class PricingTests(unittest.TestCase):
         )
         self.assertIsNotNone(result)
         self.assertEqual(result[0], "BASKET_RICH")
+
+    def test_unprofitable_tender_is_explicitly_declined(self):
+        class FakeApi:
+            def __init__(self):
+                self.declined = []
+
+            def tenders(self):
+                return [
+                    {
+                        "tender_id": 7,
+                        "ticker": RITC,
+                        "action": "BUY",
+                        "quantity": 100,
+                        "price": 30,
+                        "is_fixed_bid": True,
+                    }
+                ]
+
+            def decline_tender(self, tender_id):
+                self.declined.append(tender_id)
+
+        api = FakeApi()
+        quotes = {
+            BULL: Quote(10, 10.02, 1000, 1000),
+            BEAR: Quote(15, 15.02, 1000, 1000),
+            USD: Quote(1.4, 1.41, 1000, 1000),
+        }
+        positions = {BULL: 0, BEAR: 0, RITC: 0, USD: 0, CAD: 0}
+        seen = set()
+        accepted = process_tenders(
+            api, config(live=True), quotes, positions, [], seen
+        )
+        self.assertFalse(accepted)
+        self.assertEqual(api.declined, [7])
+        self.assertEqual(seen, {7})
 
 
 class RiskTests(unittest.TestCase):

@@ -30,7 +30,9 @@ resulting USD currency position.
 
 Private fixed-price RITC tenders are accepted only when their executable
 basket hedge has sufficient net edge and the completed package fits within
-softened API limits. Competitive tenders are skipped rather than bid blindly.
+softened API limits. All other tenders are explicitly declined, so they do not
+remain unanswered until timeout. Competitive tenders are declined rather than
+bid blindly.
 After acceptance, BULL/BEAR hedges and an USD hedge are submitted immediately.
 
 ETF Creation and Redemption converters are not automated because the case PDF

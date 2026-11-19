@@ -117,6 +117,8 @@ class RitApi:
             if not response.ok:
                 detail = response.text[:300].replace("\n", " ")
                 raise ApiError(f"{method} {path}: HTTP {response.status_code}: {detail}")
+            if not response.content:
+                return {}
             try:
                 return response.json()
             except ValueError as exc:
@@ -176,6 +178,10 @@ class RitApi:
         tender_id = int(tender["tender_id"])
         params = None if tender.get("is_fixed_bid", True) else {"price": tender["price"]}
         result = self.request("POST", f"tenders/{tender_id}", params=params)
+        return result if isinstance(result, dict) else {}
+
+    def decline_tender(self, tender_id: int) -> dict[str, Any]:
+        result = self.request("DELETE", f"tenders/{int(tender_id)}")
         return result if isinstance(result, dict) else {}
 
 
@@ -350,13 +356,22 @@ def process_tenders(
         if tender_id in seen:
             continue
         if not tender.get("is_fixed_bid", True):
-            LOG.info("skip competitive tender id=%d; no blind bidding", tender_id)
+            LOG.info("DECLINE competitive tender id=%d; no blind bidding", tender_id)
+            if config.live:
+                api.decline_tender(tender_id)
+            else:
+                LOG.info("DRY-RUN would decline tender id=%d", tender_id)
             seen.add(tender_id)
             continue
         evaluation = tender_opportunity(
             tender, quotes[BULL], quotes[BEAR], quotes[USD]
         )
         if evaluation is None:
+            LOG.info("DECLINE unsupported tender id=%d", tender_id)
+            if config.live:
+                api.decline_tender(tender_id)
+            else:
+                LOG.info("DRY-RUN would decline tender id=%d", tender_id)
             seen.add(tender_id)
             continue
         direction, net_edge = evaluation
@@ -374,6 +389,13 @@ def process_tenders(
             safe,
         )
         if not (profitable and safe):
+            reason = "insufficient edge" if not profitable else "projected limit risk"
+            LOG.info("TENDER DECLINED id=%d reason=%s", tender_id, reason)
+            if config.live:
+                api.decline_tender(tender_id)
+            else:
+                LOG.info("DRY-RUN would decline tender id=%d", tender_id)
+            seen.add(tender_id)
             continue
         if config.live:
             api.accept_tender(tender)
