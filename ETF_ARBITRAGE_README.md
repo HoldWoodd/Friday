@@ -36,6 +36,9 @@ softened API limits. All other tenders are explicitly declined, so they do not
 remain unanswered until timeout. Competitive tenders are declined rather than
 bid blindly. Large tenders are valued by sweeping every available BULL, BEAR,
 and USD book level, not by multiplying the best quote by the full quantity.
+After an acceptance request, the program re-reads `/securities` and hedges only
+the actual RITC position change. If RIT rejects the tender (for example with
+`TRADING_LIMIT`) or no inventory appears, no BULL/BEAR hedge is sent.
 After acceptance, BULL/BEAR hedges and an USD hedge are submitted immediately.
 
 ETF Creation and Redemption converters are not automated because the case PDF

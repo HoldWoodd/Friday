@@ -456,18 +456,37 @@ def process_tenders(
             seen.add(tender_id)
             continue
         if config.live:
-            api.accept_tender(tender)
-            LOG.info("TENDER ACCEPTED id=%d", tender_id)
+            ritc_before = positions[RITC]
+            response = api.accept_tender(tender)
+            time.sleep(0.05)
+            positions_after = api.positions()
+            actual_ritc_change = positions_after[RITC] - ritc_before
+            if actual_ritc_change == 0:
+                LOG.warning(
+                    "TENDER NOT FILLED id=%d response=%s; no basket hedge sent",
+                    tender_id,
+                    response,
+                )
+                seen.add(tender_id)
+                continue
+            LOG.info(
+                "TENDER FILLED id=%d actual_RITC_change=%d",
+                tender_id,
+                actual_ritc_change,
+            )
         else:
             LOG.info("DRY-RUN would accept tender id=%d", tender_id)
+            actual_ritc_change = quantity if direction == "BASKET_RICH" else -quantity
         seen.add(tender_id)
-        # The accepted RITC inventory is hedged with the two CAD stocks.
-        if direction == "BASKET_RICH":
-            submit_market_chunks(api, BULL, "SELL", quantity, config.live)
-            submit_market_chunks(api, BEAR, "SELL", quantity, config.live)
+        # Hedge only the inventory change confirmed by /securities. This also
+        # avoids depending on ambiguous tender BUY/SELL display conventions.
+        hedge_quantity = abs(actual_ritc_change)
+        if actual_ritc_change > 0:
+            submit_market_chunks(api, BULL, "SELL", hedge_quantity, config.live)
+            submit_market_chunks(api, BEAR, "SELL", hedge_quantity, config.live)
         else:
-            submit_market_chunks(api, BULL, "BUY", quantity, config.live)
-            submit_market_chunks(api, BEAR, "BUY", quantity, config.live)
+            submit_market_chunks(api, BULL, "BUY", hedge_quantity, config.live)
+            submit_market_chunks(api, BEAR, "BUY", hedge_quantity, config.live)
         hedge_usd(api, config)
         return True
     return False

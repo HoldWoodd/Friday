@@ -139,6 +139,48 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(api.declined, [7])
         self.assertEqual(seen, {7})
 
+    def test_rejected_acceptance_never_sends_naked_basket_hedge(self):
+        class FakeApi:
+            def __init__(self):
+                self.orders = []
+
+            def tenders(self):
+                return [
+                    {
+                        "tender_id": 8,
+                        "ticker": RITC,
+                        "action": "BUY",
+                        "quantity": 100,
+                        "price": 10,
+                        "is_fixed_bid": True,
+                    }
+                ]
+
+            def accept_tender(self, _tender):
+                return {"status": "TRADING_LIMIT"}
+
+            def positions(self):
+                return {BULL: 0, BEAR: 0, RITC: 0, USD: 0, CAD: 0}
+
+            def market_order(self, ticker, action, quantity):
+                self.orders.append((ticker, action, quantity))
+                return {}
+
+        api = FakeApi()
+        quotes = {
+            BULL: Quote(10, 10.02, 1000, 1000),
+            BEAR: Quote(15, 15.02, 1000, 1000),
+            USD: Quote(1.4, 1.41, 1_000_000, 1_000_000),
+        }
+        positions = {BULL: 0, BEAR: 0, RITC: 0, USD: 0, CAD: 0}
+        seen = set()
+        accepted = process_tenders(
+            api, config(live=True), quotes, positions, [], seen
+        )
+        self.assertFalse(accepted)
+        self.assertEqual(api.orders, [])
+        self.assertEqual(seen, {8})
+
 
 class RiskTests(unittest.TestCase):
     def test_ritc_uses_runtime_case_multiplier(self):
