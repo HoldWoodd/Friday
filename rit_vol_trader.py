@@ -37,6 +37,7 @@ ETF_MAX_ORDER = 10_000
 DELTA_HARD_LIMIT = 7_000.0
 OPTION_RE = re.compile(r"^RTM(?P<strike>\d+(?:\.\d+)?)(?P<kind>[CP])$")
 PERCENT_RE = re.compile(r"(?P<value>\d+(?:\.\d+)?)\s*%")
+WEEK_RE = re.compile(r"\bweek\s*(?P<week>[1-4])\b", re.IGNORECASE)
 
 
 class ApiError(RuntimeError):
@@ -193,7 +194,19 @@ def volatility_from_news(news: Iterable[dict[str, Any]], tick: int) -> float | N
         if not percentages:
             continue
         item_tick = int(item.get("tick", item.get("period", 0)) or 0)
-        if case_week(item_tick or tick) == current_week:
+        # RIT may publish the next week's current-volatility announcement one
+        # tick before that week begins (for example ticker="Week 2" at tick
+        # 74). Prefer the explicit news ticker/symbol over the release tick.
+        week_label = " ".join(
+            str(item.get(key, "")) for key in ("ticker", "symbol")
+        )
+        week_match = WEEK_RE.search(week_label)
+        announced_week = (
+            int(week_match.group("week"))
+            if week_match
+            else case_week(item_tick or tick)
+        )
+        if announced_week == current_week:
             matches.append((item_tick, float(percentages[-1]) / 100.0))
     if not matches:
         return None

@@ -59,6 +59,31 @@ class NewsTests(unittest.TestCase):
         ]
         self.assertEqual(volatility_from_news(news, 100), 0.29)
 
+    def test_explicit_week_ticker_wins_at_release_boundary(self):
+        news = [
+            {
+                "tick": 1,
+                "ticker": "Week 1",
+                "body": "Current annualized realized volatility is 32%",
+            },
+            {
+                "tick": 74,
+                "ticker": "Week 2",
+                "body": "The realized volatility of RTM this week will be 23%",
+            },
+        ]
+        self.assertEqual(volatility_from_news(news, 96), 0.23)
+
+    def test_future_week_announcement_is_not_used_early(self):
+        news = [
+            {
+                "tick": 74,
+                "ticker": "Week 2",
+                "body": "The realized volatility of RTM this week will be 23%",
+            }
+        ]
+        self.assertIsNone(volatility_from_news(news, 74))
+
     def test_news_value_can_be_retained_by_caller_for_same_week(self):
         class FakeApi:
             def case(self):

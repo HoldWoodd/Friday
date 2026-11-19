@@ -20,7 +20,9 @@ real market orders. Pass `--dry-run` for read-only signal testing.
 - The script only trades a current-week volatility value found in news, unless
   the operator explicitly supplies `--vol-percent`. A successfully parsed value
   is cached for the rest of that same week so a temporary news omission does not
-  interrupt trading; the cache is never carried into a new week.
+  interrupt trading; the cache is never carried into a new week. Explicit news
+  labels such as `Week 2` take priority over the release tick because RIT can
+  publish a week's announcement immediately before that week begins.
 - Every loop reads actual RTM and option positions from `/securities`. Logs show
   stock position, nonzero option positions, option gross/net and portfolio Delta.
 
