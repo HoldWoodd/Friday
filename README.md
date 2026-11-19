@@ -1,4 +1,4 @@
-# RITCx Volatility Trading Case — risk-controlled trader
+# RITCx Volatility Trading Case — aggressive trader
 
 This Python script connects to the RIT Client REST API, values the RTM European
 options with Black–Scholes, looks for executable mispricing, observes the case
@@ -15,10 +15,9 @@ real market orders. Pass `--dry-run` for read-only signal testing.
 - Options: gross position limit 2,500; net position limit 1,000.
 - RTM position limit: 50,000 shares.
 - Hard portfolio Delta boundary: ±7,000. The default internal hedge trigger is
-  ±1,500 and new positions must keep stressed post-hedge Delta within ±4,500.
-- Strategy soft limits preserve emergency capacity while allowing more use of
-  the case limits: ±42,500 RTM shares, 2,200 option gross, ±800 option net, and
-  ±200 contracts per ticker.
+  ±2,500 and new positions must keep stressed post-hedge Delta within ±6,000.
+- Aggressive soft limits retain a small emergency buffer: ±47,000 RTM shares,
+  2,400 option gross, ±900 option net, and ±400 contracts per ticker.
 - Risk-free rate comes from the RTM security record and can be overridden.
 - The script only trades a current-week volatility value found in news, unless
   the operator explicitly supplies `--vol-percent`. A successfully parsed value
@@ -29,13 +28,13 @@ real market orders. Pass `--dry-run` for read-only signal testing.
 - Every loop reads actual RTM and option positions from `/securities`. Logs show
   stock position, nonzero option positions, option gross/net and portfolio Delta.
 - Risk Delta is a range across analyst volatility, market implied volatility,
-  and ±0.5% RTM spot shocks. ETF hedging centers this range rather than relying on
+  and ±0.25% RTM spot shocks. ETF hedging centers this range rather than relying on
   one optimistic Delta estimate.
 - The loop may submit more than one option order during a tick while executable
   edge persists. Every live option fill is followed by an immediate position
   refresh and RTM hedge when required.
 - If ETF hedge capacity is insufficient, the strategy reduces options instead
-  of pinning RTM at its 50,000-share hard limit. From tick 250 onward it stops
+  of pinning RTM at its 50,000-share hard limit. From tick 275 onward it stops
   opening risk and progressively unwinds options.
 
 ## Installation
@@ -85,20 +84,26 @@ export RIT_API_KEY='the-key-shown-in-RIT-Client'
 5. Keep the RIT Client visible. Stop the script immediately if its displayed
    positions differ from the client or repeated API warnings appear.
 
-Useful conservative controls:
+Default aggressive controls:
 
 ```bash
 python rit_vol_trader.py \
-  --option-order-size 10 \
-  --min-profit 8 \
-  --hedge-trigger 1500 \
-  --risk-stop 4500 \
-  --etf-soft-limit 42500
+  --option-order-size 50 \
+  --min-profit 5 \
+  --hedge-trigger 2500 \
+  --risk-stop 6000 \
+  --etf-soft-limit 47000
 ```
 
 `--min-profit` is estimated dollars per option contract after the $2 option
 fee and the estimated fee for the immediate Delta hedge. It is not a guaranteed
 profit and does not include every possible future re-hedge or exit cost.
+
+The REST feed used here does not expose a live fine total, so a strict dynamic
+"fines <= 3% of P&L" controller would rely on an unverifiable estimate. The
+strategy instead stays inside all published hard limits, targeting zero limit
+fines (and therefore below 3% of P&L) while using nearly all available capacity.
+Transaction fees are already deducted from each trade's estimated edge.
 
 ## Current limitations
 

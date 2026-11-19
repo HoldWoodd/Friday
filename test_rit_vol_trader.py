@@ -9,12 +9,9 @@ from rit_vol_trader import (
     build_parser,
     case_week,
     config_from_args,
-    delta_safe_quantity,
     find_candidates,
     hedge_for_bounds,
-    hedge_quantity,
     implied_volatility,
-    option_capacity,
     portfolio_delta,
     portfolio_delta_bounds,
     read_state,
@@ -33,8 +30,6 @@ def make_config(**overrides):
         option_order_size=5,
         min_profit_per_contract=10,
         hedge_trigger=1000,
-        hedge_target=0,
-        delta_buffer=3000,
         rate_override=0,
         vol_override=None,
         request_timeout=1,
@@ -145,33 +140,17 @@ class NewsTests(unittest.TestCase):
 
 
 class RiskTests(unittest.TestCase):
-    def test_safer_defaults_from_two_case_review(self):
+    def test_aggressive_defaults(self):
         config = config_from_args(build_parser().parse_args([]))
         self.assertEqual(config.poll_seconds, 0.5)
-        self.assertEqual(config.option_order_size, 10)
-        self.assertEqual(config.hedge_trigger, 1500)
-        self.assertEqual(config.etf_soft_limit, 42_500)
-        self.assertEqual(config.option_net_soft_limit, 800)
-        self.assertEqual(config.per_ticker_limit, 200)
-        self.assertEqual(config.option_gross_soft_limit, 2200)
-        self.assertEqual(config.risk_stop, 4500)
-        self.assertEqual(config.unwind_start_tick, 250)
-
-    def test_option_capacity_obeys_gross_and_net(self):
-        options = [
-            OptionQuote("RTM48C", 48, "C", 1, 1.02, 900),
-            OptionQuote("RTM48P", 48, "P", 1, 1.02, -100),
-        ]
-        self.assertEqual(option_capacity(options, "BUY"), 200)
-        self.assertEqual(option_capacity(options, "SELL"), 1500)
-
-    def test_delta_quantity_keeps_buffer(self):
-        self.assertEqual(delta_safe_quantity(0, 0.5, "BUY", 1000), 100)
-        self.assertEqual(delta_safe_quantity(5000, 0.5, "BUY", 1000), 20)
-
-    def test_hedge_respects_stock_limit(self):
-        self.assertEqual(hedge_quantity(0, 6000, 0), -6000)
-        self.assertEqual(hedge_quantity(49_000, -10_000, 0), 1000)
+        self.assertEqual(config.option_order_size, 50)
+        self.assertEqual(config.hedge_trigger, 2500)
+        self.assertEqual(config.etf_soft_limit, 47_000)
+        self.assertEqual(config.option_net_soft_limit, 900)
+        self.assertEqual(config.per_ticker_limit, 400)
+        self.assertEqual(config.option_gross_soft_limit, 2400)
+        self.assertEqual(config.risk_stop, 6000)
+        self.assertEqual(config.unwind_start_tick, 275)
 
     def test_signal_uses_executable_side_and_fees(self):
         option = OptionQuote("RTM50C", 50, "C", 0.10, 0.12, 0)

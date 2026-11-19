@@ -53,8 +53,6 @@ class Config:
     option_order_size: int
     min_profit_per_contract: float
     hedge_trigger: float
-    hedge_target: float
-    delta_buffer: float
     rate_override: float | None
     vol_override: float | None
     request_timeout: float
@@ -388,14 +386,6 @@ def find_candidates(
     return sorted(candidates, key=lambda candidate: candidate.edge_per_contract, reverse=True)
 
 
-def option_capacity(options: Iterable[OptionQuote], action: str) -> int:
-    positions = [option.position for option in options]
-    gross_remaining = OPTION_GROSS_LIMIT - sum(abs(position) for position in positions)
-    net = sum(positions)
-    net_remaining = OPTION_NET_LIMIT - net if action == "BUY" else OPTION_NET_LIMIT + net
-    return max(0, min(gross_remaining, net_remaining))
-
-
 def soft_option_capacity(
     options: Iterable[OptionQuote],
     ticker: str,
@@ -510,29 +500,6 @@ def choose_reduction(
     if best is None:
         return None
     return best[1], best[2], best[3]
-
-
-def delta_safe_quantity(
-    current_delta: float, option_delta: float, action: str, buffer: float
-) -> int:
-    signed_change = option_delta * OPTION_MULTIPLIER * (1 if action == "BUY" else -1)
-    if abs(signed_change) < 1e-12:
-        return OPTION_MAX_ORDER
-    limit = DELTA_HARD_LIMIT - buffer
-    safe = 0
-    for quantity in range(1, OPTION_MAX_ORDER + 1):
-        if abs(current_delta + quantity * signed_change) <= limit:
-            safe = quantity
-        else:
-            break
-    return safe
-
-
-def hedge_quantity(stock_position: int, delta_exposure: float, target: float) -> int:
-    desired_change = int(round(target - delta_exposure))
-    desired_stock = stock_position + desired_change
-    desired_stock = max(-ETF_POSITION_LIMIT, min(ETF_POSITION_LIMIT, desired_stock))
-    return desired_stock - stock_position
 
 
 def submit_chunks(
@@ -846,19 +813,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", default="http://localhost:9999/v1")
     parser.add_argument("--api-key", default=os.getenv("RIT_API_KEY", "Rotman"))
     parser.add_argument("--poll-seconds", type=float, default=0.5)
-    parser.add_argument("--option-order-size", type=positive_int, default=10)
-    parser.add_argument("--min-profit", type=float, default=8.0, help="minimum estimated dollars per contract after immediate fees")
-    parser.add_argument("--hedge-trigger", type=float, default=1_500.0)
-    parser.add_argument("--hedge-target", type=float, default=0.0)
-    parser.add_argument("--delta-buffer", type=float, default=3_000.0)
-    parser.add_argument("--per-ticker-limit", type=positive_int, default=200)
-    parser.add_argument("--option-gross-soft-limit", type=positive_int, default=2_200)
-    parser.add_argument("--option-net-soft-limit", type=positive_int, default=800)
-    parser.add_argument("--etf-soft-limit", type=positive_int, default=42_500)
-    parser.add_argument("--risk-stop", type=float, default=4_500.0)
-    parser.add_argument("--unwind-start-tick", type=int, default=250)
-    parser.add_argument("--unwind-order-size", type=positive_int, default=25)
-    parser.add_argument("--spot-stress-percent", type=float, default=0.5, help="Delta stress move in percent")
+    parser.add_argument("--option-order-size", type=positive_int, default=50)
+    parser.add_argument("--min-profit", type=float, default=5.0, help="minimum estimated dollars per contract after immediate fees")
+    parser.add_argument("--hedge-trigger", type=float, default=2_500.0)
+    parser.add_argument("--per-ticker-limit", type=positive_int, default=400)
+    parser.add_argument("--option-gross-soft-limit", type=positive_int, default=2_400)
+    parser.add_argument("--option-net-soft-limit", type=positive_int, default=900)
+    parser.add_argument("--etf-soft-limit", type=positive_int, default=47_000)
+    parser.add_argument("--risk-stop", type=float, default=6_000.0)
+    parser.add_argument("--unwind-start-tick", type=int, default=275)
+    parser.add_argument("--unwind-order-size", type=positive_int, default=50)
+    parser.add_argument("--spot-stress-percent", type=float, default=0.25, help="Delta stress move in percent")
     parser.add_argument("--risk-free-percent", type=float, default=None)
     parser.add_argument("--vol-percent", type=float, default=None, help="override news with an annualized percentage, e.g. 20")
     parser.add_argument("--request-timeout", type=float, default=2.0)
@@ -871,10 +836,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         raise SystemExit("--live and --dry-run cannot be used together")
     if not 0 < args.option_order_size <= OPTION_MAX_ORDER:
         raise SystemExit("--option-order-size must be between 1 and 100")
-    if not 0 <= args.hedge_target < args.hedge_trigger < DELTA_HARD_LIMIT:
-        raise SystemExit("require 0 <= hedge-target < hedge-trigger < 7000")
-    if not 0 <= args.delta_buffer < DELTA_HARD_LIMIT:
-        raise SystemExit("--delta-buffer must be in [0, 7000)")
+    if not 0 < args.hedge_trigger < DELTA_HARD_LIMIT:
+        raise SystemExit("--hedge-trigger must be in (0, 7000)")
     if args.poll_seconds <= 0 or args.request_timeout <= 0:
         raise SystemExit("poll interval and request timeout must be positive")
     if args.vol_percent is not None and args.vol_percent <= 0:
@@ -903,8 +866,6 @@ def config_from_args(args: argparse.Namespace) -> Config:
         option_order_size=args.option_order_size,
         min_profit_per_contract=args.min_profit,
         hedge_trigger=args.hedge_trigger,
-        hedge_target=args.hedge_target,
-        delta_buffer=args.delta_buffer,
         rate_override=None if args.risk_free_percent is None else args.risk_free_percent / 100.0,
         vol_override=None if args.vol_percent is None else args.vol_percent / 100.0,
         request_timeout=args.request_timeout,
