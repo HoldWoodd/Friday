@@ -496,7 +496,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-mode", choices=("rest", "dma"), default="rest")
     parser.add_argument("--base-url", default=None)
-    parser.add_argument("--api-key", default=os.getenv("RIT_API_KEY", "Rotman"))
+    parser.add_argument("--api-key", default=os.getenv("RIT_API_KEY", "JOE"))
     parser.add_argument("--username", default=os.getenv("RIT_DMA_USERNAME"))
     parser.add_argument("--password", default=os.getenv("RIT_DMA_PASSWORD"))
     parser.add_argument("--dry-run", action="store_true")

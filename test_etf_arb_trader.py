@@ -109,6 +109,7 @@ class RiskTests(unittest.TestCase):
         self.assertEqual(result.api_mode, "rest")
         self.assertEqual(result.order_size, 1000)
         self.assertEqual(result.base_url, "http://localhost:9999/v1")
+        self.assertEqual(result.api_key, "JOE")
         self.assertTrue(result.live)
 
     def test_dma_default_endpoint(self):

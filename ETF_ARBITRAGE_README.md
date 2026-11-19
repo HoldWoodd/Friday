@@ -63,7 +63,8 @@ After verifying quotes, positions, tender decisions and edges, remove
 --api-mode rest --api-key YOUR_KEY
 ```
 
-If the key is `Rotman`, `--api-key` can be omitted.
+The default REST API key is `JOE`, so `--api-key` can be omitted when the RIT
+Client uses that key.
 
 ## DMA API
 
