@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """First-pass automated trader for the RITCx Volatility Trading Case.
 
-The default mode is deliberately read-only. Pass --live to allow market orders.
+The default mode sends orders. Pass --dry-run for read-only signal testing.
 """
 
 from __future__ import annotations
@@ -336,7 +336,11 @@ def effective_rate(underlying: dict[str, Any], override: float | None) -> float:
     return raw / 100.0 if abs(raw) > 1.0 else raw
 
 
-def read_state(api: RitApi, config: Config) -> tuple[int, float, float, dict[str, Any], list[OptionQuote]]:
+def read_state(
+    api: RitApi,
+    config: Config,
+    cached_volatility: tuple[int, float] | None,
+) -> tuple[int, float, float, str, dict[str, Any], list[OptionQuote]]:
     tick = int(api.case()["tick"])
     underlying, options = parse_market(api.securities())
     spot = (float(underlying.get("bid", 0.0)) + float(underlying.get("ask", 0.0))) / 2.0
@@ -345,41 +349,87 @@ def read_state(api: RitApi, config: Config) -> tuple[int, float, float, dict[str
     if spot <= 0:
         raise ApiError("RTM has no usable bid/ask or last price")
     volatility = config.vol_override
+    source = "override"
     if volatility is None:
-        volatility = volatility_from_news(api.news(), tick)
+        try:
+            volatility = volatility_from_news(api.news(), tick)
+        except ApiError as exc:
+            LOG.warning("news request failed; trying same-week cache: %s", exc)
+            volatility = None
+        source = "news"
+    if volatility is None and cached_volatility is not None:
+        cached_week, cached_value = cached_volatility
+        if cached_week == case_week(tick):
+            volatility = cached_value
+            source = "cache"
     if volatility is None:
         raise ApiError("no current-week volatility found; wait for news or pass --vol-percent")
-    return tick, spot, volatility, underlying, options
+    return tick, spot, volatility, source, underlying, options
 
 
 def run(config: Config) -> None:
     api = RitApi(config)
     last_summary_tick: int | None = None
+    last_positions: tuple[int, tuple[tuple[str, int], ...]] | None = None
+    last_vol_source: str | None = None
+    cached_volatility: tuple[int, float] | None = None
+    LOG.warning(
+        "startup mode=%s; %s",
+        "LIVE" if config.live else "DRY-RUN",
+        "REAL MARKET ORDERS ARE ENABLED" if config.live else "orders will only be logged",
+    )
     while not STOP:
         try:
-            tick, spot, volatility, underlying, options = read_state(api, config)
+            tick, spot, volatility, vol_source, underlying, options = read_state(
+                api, config, cached_volatility
+            )
+            if vol_source in {"news", "override"}:
+                cached_volatility = (case_week(tick), volatility)
+            if vol_source != last_vol_source:
+                LOG.info("volatility source=%s value=%.2f%%", vol_source, volatility * 100.0)
+                last_vol_source = vol_source
             if tick >= CASE_TICKS:
                 LOG.info("case reached tick %d; no new orders", tick)
                 return
             years = years_remaining(tick)
             rate = effective_rate(underlying, config.rate_override)
             stock_position = int(underlying.get("position", 0) or 0)
+            option_gross = sum(abs(option.position) for option in options)
+            option_net = sum(option.position for option in options)
             delta_now = portfolio_delta(
                 stock_position, options, spot, years, rate, volatility
             )
 
             if tick != last_summary_tick:
                 LOG.info(
-                    "tick=%d week=%d RTM=%.2f vol=%.2f%% delta=%.1f stock=%d mode=%s",
+                    "tick=%d week=%d RTM=%.2f vol=%.2f%%(%s) delta=%.1f stock=%d option_gross=%d option_net=%d mode=%s",
                     tick,
                     case_week(tick),
                     spot,
                     volatility * 100.0,
+                    vol_source,
                     delta_now,
                     stock_position,
+                    option_gross,
+                    option_net,
                     "LIVE" if config.live else "DRY-RUN",
                 )
                 last_summary_tick = tick
+
+            nonzero_options = tuple(
+                sorted((option.ticker, option.position) for option in options if option.position)
+            )
+            positions = (stock_position, nonzero_options)
+            if positions != last_positions:
+                detail = ", ".join(f"{ticker}={position}" for ticker, position in nonzero_options)
+                LOG.info(
+                    "POSITIONS RTM=%d options=[%s] gross=%d net=%d",
+                    stock_position,
+                    detail or "none",
+                    option_gross,
+                    option_net,
+                )
+                last_positions = positions
 
             if abs(delta_now) >= config.hedge_trigger:
                 target = math.copysign(config.hedge_target, delta_now) if config.hedge_target else 0.0
@@ -433,7 +483,8 @@ def positive_int(value: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--live", action="store_true", help="enable real market orders")
+    parser.add_argument("--dry-run", action="store_true", help="disable real orders and only log signals")
+    parser.add_argument("--live", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--base-url", default="http://localhost:9999/v1")
     parser.add_argument("--api-key", default=os.getenv("RIT_API_KEY", "Rotman"))
     parser.add_argument("--poll-seconds", type=float, default=0.5)
@@ -450,6 +501,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def config_from_args(args: argparse.Namespace) -> Config:
+    if args.live and args.dry_run:
+        raise SystemExit("--live and --dry-run cannot be used together")
     if not 0 < args.option_order_size <= OPTION_MAX_ORDER:
         raise SystemExit("--option-order-size must be between 1 and 100")
     if not 0 <= args.hedge_target < args.hedge_trigger < DELTA_HARD_LIMIT:
@@ -463,7 +516,7 @@ def config_from_args(args: argparse.Namespace) -> Config:
     return Config(
         base_url=args.base_url,
         api_key=args.api_key,
-        live=args.live,
+        live=not args.dry_run,
         poll_seconds=args.poll_seconds,
         option_order_size=args.option_order_size,
         min_profit_per_contract=args.min_profit,

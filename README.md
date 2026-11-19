@@ -2,8 +2,8 @@
 
 This Python script connects to the RIT Client REST API, values the RTM European
 options with Black–Scholes, looks for executable mispricing, observes the case
-position limits, and delta-hedges with RTM. It starts in **read-only dry-run
-mode** and cannot submit an order unless `--live` is explicitly supplied.
+position limits, and delta-hedges with RTM. It starts in **live mode** and sends
+real market orders. Pass `--dry-run` for read-only signal testing.
 
 ## Case rules represented in the code
 
@@ -18,7 +18,11 @@ mode** and cannot submit an order unless `--live` is explicitly supplied.
   ±3,500 with a target of ±500.
 - Risk-free rate comes from the RTM security record and can be overridden.
 - The script only trades a current-week volatility value found in news, unless
-  the operator explicitly supplies `--vol-percent`.
+  the operator explicitly supplies `--vol-percent`. A successfully parsed value
+  is cached for the rest of that same week so a temporary news omission does not
+  interrupt trading; the cache is never carried into a new week.
+- Every loop reads actual RTM and option positions from `/securities`. Logs show
+  stock position, nonzero option positions, option gross/net and portfolio Delta.
 
 ## Installation
 
@@ -43,10 +47,10 @@ export RIT_API_KEY='the-key-shown-in-RIT-Client'
 ## Safe operating procedure
 
 1. Start the case in RIT Client.
-2. Run the script without `--live` first:
+2. Run the script with `--dry-run` first:
 
    ```bash
-   python rit_vol_trader.py
+   python rit_vol_trader.py --dry-run
    ```
 
 3. Confirm that it prints a sensible RTM price, current volatility, portfolio
@@ -57,10 +61,11 @@ export RIT_API_KEY='the-key-shown-in-RIT-Client'
    python rit_vol_trader.py --vol-percent 20
    ```
 
-4. Stop with Ctrl-C. Only after checking the dry-run output, enable orders:
+4. Stop with Ctrl-C. Only after checking the dry-run output, run without
+   `--dry-run` to enable orders:
 
    ```bash
-   python rit_vol_trader.py --live
+   python rit_vol_trader.py
    ```
 
 5. Keep the RIT Client visible. Stop the script immediately if its displayed
@@ -69,7 +74,7 @@ export RIT_API_KEY='the-key-shown-in-RIT-Client'
 Useful conservative controls:
 
 ```bash
-python rit_vol_trader.py --live \
+python rit_vol_trader.py \
   --option-order-size 10 \
   --min-profit 5 \
   --hedge-trigger 3000 \

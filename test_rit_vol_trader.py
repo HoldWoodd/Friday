@@ -2,6 +2,8 @@ import math
 import unittest
 
 from rit_vol_trader import (
+    ApiError,
+    Config,
     Candidate,
     OptionQuote,
     black_scholes,
@@ -11,6 +13,7 @@ from rit_vol_trader import (
     hedge_quantity,
     option_capacity,
     portfolio_delta,
+    read_state,
     volatility_from_news,
     years_remaining,
 )
@@ -55,6 +58,41 @@ class NewsTests(unittest.TestCase):
             {"tick": 76, "body": "Realized volatility for this week will be 29%"},
         ]
         self.assertEqual(volatility_from_news(news, 100), 0.29)
+
+    def test_news_value_can_be_retained_by_caller_for_same_week(self):
+        class FakeApi:
+            def case(self):
+                return {"tick": 159}
+
+            def securities(self):
+                return [
+                    {"ticker": "RTM", "bid": 50, "ask": 50.02, "position": 0},
+                    {"ticker": "RTM50C", "bid": 1, "ask": 1.02, "position": 0},
+                ]
+
+            def news(self):
+                return []
+
+        config = Config(
+            base_url="http://localhost",
+            api_key="test",
+            live=False,
+            poll_seconds=1,
+            option_order_size=1,
+            min_profit_per_contract=1,
+            hedge_trigger=3000,
+            hedge_target=500,
+            delta_buffer=1000,
+            rate_override=0,
+            vol_override=None,
+            request_timeout=1,
+        )
+        _, _, volatility, source, _, _ = read_state(FakeApi(), config, (3, 0.28))
+        self.assertEqual(volatility, 0.28)
+        self.assertEqual(source, "cache")
+
+        with self.assertRaises(ApiError):
+            read_state(FakeApi(), config, (2, 0.20))
 
 
 class RiskTests(unittest.TestCase):
