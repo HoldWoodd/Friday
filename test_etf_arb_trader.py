@@ -15,6 +15,7 @@ from etf_arb_trader import (
     process_tenders,
     projected_positions,
     tender_opportunity,
+    sweep_notional,
     weighted_exposure,
     within_limits,
 )
@@ -38,6 +39,7 @@ def config(**overrides):
         fallback_net_limit=25_000,
         fx_tolerance=100,
         max_retries=4,
+        ritc_limit_multiplier=0.5,
     )
     values.update(overrides)
     return Config(**values)
@@ -72,13 +74,35 @@ class PricingTests(unittest.TestCase):
 
     def test_tender_buy_is_hedged_by_selling_basket(self):
         result = tender_opportunity(
-            {"ticker": RITC, "action": "BUY", "price": 17.0},
+            {"ticker": RITC, "action": "BUY", "quantity": 100, "price": 17.0},
             Quote(12.1, 12.2, 1000, 1000),
             Quote(13.1, 13.2, 1000, 1000),
             Quote(1.4, 1.41, 1000, 1000),
         )
         self.assertIsNotNone(result)
         self.assertEqual(result[0], "BASKET_RICH")
+
+    def test_negative_tender_quantity_infers_sell_direction(self):
+        result = tender_opportunity(
+            {"ticker": RITC, "quantity": -100, "price": 20.0},
+            Quote(10, 10.1, 1000, 1000),
+            Quote(15, 15.1, 1000, 1000),
+            Quote(1.4, 1.41, 1000, 1000),
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], "ETF_RICH")
+
+    def test_tender_sweep_uses_multiple_book_levels(self):
+        quote = Quote(
+            10,
+            10.1,
+            50,
+            50,
+            bid_levels=((10.0, 50), (9.9, 50)),
+            ask_levels=((10.1, 50), (10.2, 50)),
+        )
+        self.assertAlmostEqual(sweep_notional(quote, "bid", 100), 995)
+        self.assertIsNone(sweep_notional(quote, "bid", 101))
 
     def test_unprofitable_tender_is_explicitly_declined(self):
         class FakeApi:
@@ -117,18 +141,18 @@ class PricingTests(unittest.TestCase):
 
 
 class RiskTests(unittest.TestCase):
-    def test_ritc_has_position_multiplier_two(self):
+    def test_ritc_uses_runtime_case_multiplier(self):
         positions = {BULL: 100, BEAR: -50, RITC: 200, USD: 0, CAD: 0}
         gross, net = weighted_exposure(positions)
-        self.assertEqual(gross, 550)
-        self.assertEqual(net, 450)
+        self.assertEqual(gross, 250)
+        self.assertEqual(net, 150)
 
-    def test_completed_package_is_weighted_net_neutral(self):
+    def test_completed_package_is_economic_hedge_but_consumes_limit_net(self):
         positions = {BULL: 0, BEAR: 0, RITC: 0, USD: 0, CAD: 0}
         projected = projected_positions(positions, "BASKET_RICH", 1000)
         gross, net = weighted_exposure(projected)
-        self.assertEqual(gross, 4000)
-        self.assertEqual(net, 0)
+        self.assertEqual(gross, 2500)
+        self.assertEqual(net, -1500)
 
     def test_api_limits_are_softened(self):
         rows = [{"name": "LIMIT", "gross_limit": 100_000, "net_limit": 20_000}]
@@ -144,6 +168,9 @@ class RiskTests(unittest.TestCase):
         result = config_from_args(build_parser().parse_args([]))
         self.assertEqual(result.api_mode, "rest")
         self.assertEqual(result.order_size, 1000)
+        self.assertEqual(result.min_net_edge, 0.05)
+        self.assertEqual(result.tender_min_net_edge, 0.05)
+        self.assertEqual(result.ritc_limit_multiplier, 0.5)
         self.assertEqual(result.base_url, "http://localhost:9999/v1")
         self.assertEqual(result.api_key, "JOE")
         self.assertTrue(result.live)

@@ -32,7 +32,7 @@ INSTRUMENTS = (CAD, USD, BULL, BEAR, RITC)
 EQUITY_MAX_ORDER = 10_000
 FX_MAX_ORDER = 2_500_000
 MARKET_FEE_CAD = 0.02
-RITC_LIMIT_MULTIPLIER = 2
+DEFAULT_RITC_LIMIT_MULTIPLIER = 0.5
 
 
 class ApiError(RuntimeError):
@@ -57,6 +57,7 @@ class Config:
     fallback_net_limit: int
     fx_tolerance: int
     max_retries: int
+    ritc_limit_multiplier: float
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,8 @@ class Quote:
     ask: float
     bid_size: int
     ask_size: int
+    bid_levels: tuple[tuple[float, int], ...] = ()
+    ask_levels: tuple[tuple[float, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -139,11 +142,23 @@ class RitApi:
             raise ApiError(f"{ticker} has an empty book side")
         bid = bids[0]
         ask = asks[0]
+        bid_levels = tuple(
+            (float(level["price"]), int(level.get("quantity", 0) or 0))
+            for level in bids
+            if int(level.get("quantity", 0) or 0) > 0
+        )
+        ask_levels = tuple(
+            (float(level["price"]), int(level.get("quantity", 0) or 0))
+            for level in asks
+            if int(level.get("quantity", 0) or 0) > 0
+        )
         return Quote(
             bid=float(bid["price"]),
             ask=float(ask["price"]),
             bid_size=int(bid.get("quantity", bid.get("quantity_filled", 0)) or 0),
             ask_size=int(ask.get("quantity", ask.get("quantity_filled", 0)) or 0),
+            bid_levels=bid_levels,
+            ask_levels=ask_levels,
         )
 
     def positions(self) -> dict[str, int]:
@@ -185,8 +200,14 @@ class RitApi:
         return result if isinstance(result, dict) else {}
 
 
-def weighted_exposure(positions: dict[str, int]) -> tuple[int, int]:
-    components = (positions[BULL], positions[BEAR], RITC_LIMIT_MULTIPLIER * positions[RITC])
+def weighted_exposure(
+    positions: dict[str, int], ritc_multiplier: float = DEFAULT_RITC_LIMIT_MULTIPLIER
+) -> tuple[float, float]:
+    components = (
+        positions[BULL],
+        positions[BEAR],
+        ritc_multiplier * positions[RITC],
+    )
     return sum(abs(value) for value in components), sum(components)
 
 
@@ -227,13 +248,32 @@ def discovered_limits(
 def within_limits(
     positions: dict[str, int], limit_rows: Iterable[dict[str, Any]], config: Config
 ) -> bool:
-    gross, net = weighted_exposure(positions)
+    gross, net = weighted_exposure(positions, config.ritc_limit_multiplier)
     gross_limit, net_limit = discovered_limits(limit_rows, config)
     return gross <= gross_limit and abs(net) <= net_limit
 
 
 def market_fee_per_package(usd_cad: float) -> float:
     return MARKET_FEE_CAD + MARKET_FEE_CAD + MARKET_FEE_CAD * usd_cad
+
+
+def sweep_notional(quote: Quote, side: str, quantity: int) -> float | None:
+    """CAD or native-currency notional to sweep quantity through one book side."""
+    if quantity <= 0:
+        return 0.0
+    levels = quote.bid_levels if side == "bid" else quote.ask_levels
+    if not levels:
+        price = quote.bid if side == "bid" else quote.ask
+        return price * quantity
+    remaining = quantity
+    total = 0.0
+    for price, available in levels:
+        fill = min(remaining, available)
+        total += fill * price
+        remaining -= fill
+        if remaining == 0:
+            return total
+    return None
 
 
 def find_opportunities(
@@ -283,17 +323,35 @@ def tender_opportunity(
 ) -> tuple[str, float] | None:
     if str(tender.get("ticker", RITC)) != RITC:
         return None
+    raw_quantity = int(tender.get("quantity", 0) or 0)
+    quantity = abs(raw_quantity)
+    if quantity == 0:
+        return None
     action = str(tender.get("action", "")).upper()
+    if action not in {"BUY", "SELL"}:
+        action = "BUY" if raw_quantity > 0 else "SELL"
     price = float(tender.get("price", 0) or 0)
     if price <= 0:
         return None
     # RIT's action is the trader's inventory action: BUY adds RITC, SELL removes it.
     if action == "BUY":
-        gross = bull.bid + bear.bid - price * usd.ask
-        return "BASKET_RICH", gross - 2 * MARKET_FEE_CAD
+        bull_proceeds = sweep_notional(bull, "bid", quantity)
+        bear_proceeds = sweep_notional(bear, "bid", quantity)
+        usd_cost = sweep_notional(usd, "ask", int(round(price * quantity)))
+        if bull_proceeds is None or bear_proceeds is None or usd_cost is None:
+            return None
+        net_total = bull_proceeds + bear_proceeds - usd_cost
+        net_total -= 2 * MARKET_FEE_CAD * quantity
+        return "BASKET_RICH", net_total / quantity
     if action == "SELL":
-        gross = price * usd.bid - bull.ask - bear.ask
-        return "ETF_RICH", gross - 2 * MARKET_FEE_CAD
+        usd_proceeds = sweep_notional(usd, "bid", int(round(price * quantity)))
+        bull_cost = sweep_notional(bull, "ask", quantity)
+        bear_cost = sweep_notional(bear, "ask", quantity)
+        if usd_proceeds is None or bull_cost is None or bear_cost is None:
+            return None
+        net_total = usd_proceeds - bull_cost - bear_cost
+        net_total -= 2 * MARKET_FEE_CAD * quantity
+        return "ETF_RICH", net_total / quantity
     return None
 
 
@@ -375,7 +433,7 @@ def process_tenders(
             seen.add(tender_id)
             continue
         direction, net_edge = evaluation
-        quantity = int(tender.get("quantity", 0) or 0)
+        quantity = abs(int(tender.get("quantity", 0) or 0))
         projected = projected_positions(positions, direction, quantity)
         profitable = net_edge >= config.tender_min_net_edge
         safe = quantity > 0 and within_limits(projected, limit_rows, config)
@@ -439,7 +497,9 @@ def run(config: Config) -> None:
             quotes = {ticker: api.book(ticker) for ticker in (BULL, BEAR, RITC, USD)}
             positions = api.positions()
             limit_rows = api.limits()
-            gross, net = weighted_exposure(positions)
+            gross, net = weighted_exposure(
+                positions, config.ritc_limit_multiplier
+            )
 
             if process_tenders(
                 api, config, quotes, positions, limit_rows, seen_tenders
@@ -525,13 +585,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--poll-seconds", type=float, default=0.5)
     parser.add_argument("--request-timeout", type=float, default=2.0)
     parser.add_argument("--order-size", type=positive_int, default=1_000)
-    parser.add_argument("--min-net-edge", type=float, default=0.02)
-    parser.add_argument("--tender-min-net-edge", type=float, default=0.03)
+    parser.add_argument("--min-net-edge", type=float, default=0.05)
+    parser.add_argument("--tender-min-net-edge", type=float, default=0.05)
     parser.add_argument("--limit-usage", type=float, default=0.85)
     parser.add_argument("--fallback-gross-limit", type=positive_int, default=300_000)
     parser.add_argument("--fallback-net-limit", type=positive_int, default=25_000)
     parser.add_argument("--fx-tolerance", type=positive_int, default=100)
     parser.add_argument("--max-retries", type=int, default=4)
+    parser.add_argument(
+        "--ritc-limit-multiplier",
+        type=float,
+        default=DEFAULT_RITC_LIMIT_MULTIPLIER,
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -547,6 +612,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         raise SystemExit("edge thresholds cannot be negative")
     if args.max_retries < 0:
         raise SystemExit("--max-retries cannot be negative")
+    if args.ritc_limit_multiplier <= 0:
+        raise SystemExit("--ritc-limit-multiplier must be positive")
     base_url = args.base_url
     if base_url is None:
         base_url = (
@@ -571,6 +638,7 @@ def config_from_args(args: argparse.Namespace) -> Config:
         fallback_net_limit=args.fallback_net_limit,
         fx_tolerance=args.fx_tolerance,
         max_retries=args.max_retries,
+        ritc_limit_multiplier=args.ritc_limit_multiplier,
     )
 
 

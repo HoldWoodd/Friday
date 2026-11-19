@@ -24,15 +24,18 @@ The program evaluates both executable directions using bid/ask prices:
 - ETF rich: sell RITC, buy BULL and BEAR.
 
 It subtracts market fees before trading, limits child orders to visible top-of-
-book size and the configured order size, applies the RITC ×2 position-limit
-multiplier, checks projected positions against `/limits`, and neutralizes the
-resulting USD currency position.
+book size and the configured order size, checks projected positions against
+`/limits`, and neutralizes the resulting USD currency position. The supplied
+PDF describes a RITC limit multiplier of 2, but the actual performance report's
+Security Info reports `LIMIT-STOCK×0.5`; the runtime default therefore uses 0.5
+and exposes `--ritc-limit-multiplier` if another heat is configured differently.
 
 Private fixed-price RITC tenders are accepted only when their executable
 basket hedge has sufficient net edge and the completed package fits within
 softened API limits. All other tenders are explicitly declined, so they do not
 remain unanswered until timeout. Competitive tenders are declined rather than
-bid blindly.
+bid blindly. Large tenders are valued by sweeping every available BULL, BEAR,
+and USD book level, not by multiplying the best quote by the full quantity.
 After acceptance, BULL/BEAR hedges and an USD hedge are submitted immediately.
 
 ETF Creation and Redemption converters are not automated because the case PDF
@@ -94,10 +97,11 @@ handled with `Retry-After`/exponential retry logic.
 ```text
 poll interval             0.5 seconds
 arbitrage child order     1,000 shares per leg
-minimum net arb edge      CAD 0.02/share after market fees
-minimum tender net edge   CAD 0.03/share after stock hedge fees
+minimum net arb edge      CAD 0.05/share after market fees
+minimum tender net edge   CAD 0.05/share after stock hedge fees and book sweep
 limit usage               85% of limits reported by /limits
 USD hedge tolerance       100 USD
+RITC limit multiplier     0.5 (from actual case Security Info)
 ```
 
 Useful options:
