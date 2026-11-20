@@ -71,6 +71,10 @@ def implied_vol(kind, price, spot, strike, years, rate):
 def week(tick):
     return min(4, (max(tick, 1) - 1) // 75 + 1)
 
+def news_risk_window(tick):
+    boundary = ((max(tick, 1) - 1) // 75 + 1) * 75
+    return boundary <= 225 and boundary - tick <= 5
+
 def news_vol(news, tick):
     current, fallback = week(tick), None
     for item in sorted(news, key=lambda x: x.get("tick", 0), reverse=True):
@@ -197,6 +201,19 @@ def hedge(api, vol, live):
         LOG.info("hedge risk_delta=[%.0f, %.0f] change=%d", *bounds, change)
         send(api, "RTM", change, ETF_ORDER, live)
 
+def unwind(api, etf, options, vol, live):
+    open_options = [option for option in options if option.position]
+    if open_options:
+        for option in open_options:
+            send(api, option.ticker, -option.position, 100, live)
+        hedge(api, vol, live)
+    else:
+        position = int(etf.get("position", 0))
+        if position:
+            LOG.info("flatten RTM position=%d", position)
+            send(api, "RTM", -position, ETF_ORDER, live)
+    return bool(open_options or int(etf.get("position", 0)))
+
 def run(args):
     api, cached = API(args.url, args.key), None
     while True:
@@ -210,12 +227,10 @@ def run(args):
                 raise RuntimeError("no current volatility forecast")
             cached = vol
             _, etf, options, spot, years, rate, _ = state(api, vol)
-            if tick >= 275:
-                open_options = [x for x in options if x.position]
-                for target in open_options:
-                    send(api, target.ticker, -target.position, 100, args.live)
-                if open_options:
-                    hedge(api, vol, args.live)
+            if tick >= 275 or news_risk_window(tick):
+                reason = "close" if tick >= 275 else "news"
+                LOG.info("%s risk window tick=%d: flattening", reason, tick)
+                unwind(api, etf, options, vol, args.live)
                 time.sleep(args.poll)
                 continue
             etf_position = int(etf.get("position", 0))
