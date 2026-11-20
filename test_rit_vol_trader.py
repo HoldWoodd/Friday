@@ -1,7 +1,7 @@
 import unittest
 from rit_vol_trader import (Option, adaptive_quantity, black_scholes, hedge_change,
     implied_vol, news_risk_window, news_vol, option_quantity, portfolio_delta,
-    shifted_bounds, unwind, week)
+    planned_hedge, risk_reduction, shifted_bounds, unwind, week)
 
 class FakeAPI:
     def __init__(self):
@@ -53,6 +53,9 @@ class TraderTests(unittest.TestCase):
         self.assertEqual(hedge_change(0, (4000, 4000)), -3000)
         self.assertEqual(hedge_change(0, (2500, 2500)), 0)
 
+    def test_hedge_forces_rtm_back_inside_reserve(self):
+        self.assertEqual(planned_hedge(-50000, (0, 0), 35000), 15000)
+
     def test_adaptive_size_preserves_etf_reserve(self):
         option = Option("RTM50P", 50, "P", 1, 1.1, 0)
         self.assertEqual(adaptive_quantity([option], option, "BUY", -.5, -.5, (0, 0), 0), 100)
@@ -64,6 +67,13 @@ class TraderTests(unittest.TestCase):
 
     def test_projected_bounds_use_both_delta_models(self):
         self.assertEqual(shifted_bounds((0, 0), "BUY", .4, .6, 100), (4000, 6000))
+
+    def test_reduces_option_when_rtm_reserve_cannot_make_delta_safe(self):
+        option = Option("RTM50P", 50, "P", 1, 1.1, 200)
+        result = risk_reduction([option], 35000, (-10000, -10000),
+                                50, 1 / 12, 0, .2)
+        self.assertEqual(result[0:2], (option, "SELL"))
+        self.assertEqual(result[2], 50)
 
     def test_unwind_flattens_rtm_after_options_are_closed(self):
         api = FakeAPI()

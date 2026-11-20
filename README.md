@@ -18,8 +18,9 @@ case. Tests are kept separately.
 - Checks portfolio Delta with both the news forecast and option-implied
   volatility. New option risk normally stays within ±5,000; a trade outside
   that band is allowed only when it reduces existing risk and can be hedged.
-- Treats ±40,000 RTM as a warning level, ±45,000 as the normal hedge-capacity
-  boundary, and uses the final 5,000 shares only for emergency Delta control.
+- Treats ±30,000 RTM as a warning level and ±35,000 as the strategy limit. If
+  that RTM capacity cannot bring Delta below the entry guard, closes 50
+  contracts of the option that reduces the most risk instead of using ±50,000.
 - During ticks 70–75, 145–150, and 220–225, stops opening positions and flattens
   the portfolio before the scheduled weekly volatility reset.
 - From tick 275 onward, closes all options and then keeps flattening RTM to zero;
