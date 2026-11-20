@@ -4,7 +4,7 @@ import argparse, logging, math, os, re, time
 from dataclasses import dataclass
 import requests
 
-TICKS, DAYS, MULT = 300, 20, 100
+TICKS, DAYS, MULT, START_TICK = 300, 20, 100, 76
 OPT_GROSS, OPT_NET, ETF_LIMIT = 2500, 1000, 50000
 OPT_ORDER, ETF_ORDER, PER_TICKER = 100, 10000, 400
 DELTA_LIMIT, ENTRY_LIMIT = 7000, 5000
@@ -79,15 +79,30 @@ def news_vol(news, tick):
     current, fallback = week(tick), None
     for item in sorted(news, key=lambda x: x.get("tick", 0), reverse=True):
         text = f'{item.get("headline", "")} {item.get("body", "")}'
-        values = [float(x) / 100 for x in re.findall(r"(\d+(?:\.\d+)?)\s*%", text)]
+        label_text = f'{item.get("ticker", "")} {item.get("symbol", "")} {text}'
+        values = []
+        for match in re.finditer(r"(\d+(?:\.\d+)?)\s*%", text):
+            context = text[max(0, match.start() - 80):match.start()]
+            if re.search(r"volatil", context, re.I):
+                values.append(float(match.group(1)) / 100)
         if not values:
             continue
-        labeled = re.search(r"week\s*([1-4])", text, re.I)
+        if re.search(r"between|range|from\s+\d", text, re.I) or len(values) > 1:
+            continue
+        labeled = re.search(r"week\s*([1-4])", label_text, re.I)
         if labeled and int(labeled.group(1)) == current:
             return values[0]
-        if not labeled and not re.search(r"next\s+week|between", text, re.I) and fallback is None:
+        if not labeled and not re.search(r"next\s+week", text, re.I) and fallback is None:
             fallback = values[0]
     return fallback
+
+def current_vol(override, news, tick, cache):
+    if override:
+        return override / 100
+    value, current = news_vol(news, tick), week(tick)
+    if value:
+        cache[current] = value
+    return cache.get(current)
 
 def market(securities):
     etf, options = None, []
@@ -242,17 +257,20 @@ def unwind(api, etf, options, vol, live):
     return bool(open_options or int(etf.get("position", 0)))
 
 def run(args):
-    api, cached = API(args.url, args.key), None
+    api, cache = API(args.url, args.key), {}
     while True:
         try:
             case = api.get("/case")
             tick = int(case["tick"])
             if tick >= TICKS:
                 return
-            vol = args.vol / 100 if args.vol else news_vol(api.get("/news"), tick) or cached
+            if tick < START_TICK:
+                LOG.info("week 1 sleep tick=%d", tick)
+                time.sleep(args.poll)
+                continue
+            vol = current_vol(args.vol, api.get("/news"), tick, cache)
             if not vol:
                 raise RuntimeError("no current volatility forecast")
-            cached = vol
             _, etf, options, spot, years, rate, _ = state(api, vol)
             if tick >= 275 or news_risk_window(tick):
                 reason = "close" if tick >= 275 else "news"

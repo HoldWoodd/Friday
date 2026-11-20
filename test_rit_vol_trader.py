@@ -1,7 +1,7 @@
 import unittest
 from rit_vol_trader import (Option, adaptive_quantity, black_scholes, hedge_change,
-    implied_vol, news_risk_window, news_vol, option_quantity, portfolio_delta,
-    planned_hedge, risk_reduction, shifted_bounds, unwind, week)
+    current_vol, implied_vol, news_risk_window, news_vol, option_quantity,
+    portfolio_delta, planned_hedge, risk_reduction, shifted_bounds, unwind, week)
 
 class FakeAPI:
     def __init__(self):
@@ -36,6 +36,22 @@ class TraderTests(unittest.TestCase):
         news = [{"tick": 75, "body": "Next week volatility will be between 27-30%"},
                 {"tick": 1, "body": "Current volatility is 20%"}]
         self.assertEqual(news_vol(news, 75), .20)
+
+    def test_news_extracts_volatility_not_risk_free_rate(self):
+        news = [{"tick": 1, "ticker": "Week 1", "body":
+            "The current risk free rate is 0%. RTM current annualized realized volatility is 35%."}]
+        self.assertEqual(news_vol(news, 1), .35)
+
+    def test_news_ignores_labeled_volatility_range(self):
+        news = [{"tick": 74, "ticker": "Week 2", "body":
+            "Week 2 volatility will be between 27% and 30%."}]
+        self.assertIsNone(news_vol(news, 76))
+
+    def test_volatility_cache_does_not_cross_weeks(self):
+        cache = {}
+        week_two = [{"tick": 111, "ticker": "Week 2", "body": "Realized volatility is 28%."}]
+        self.assertEqual(current_vol(None, week_two, 111, cache), .28)
+        self.assertIsNone(current_vol(None, [], 151, cache))
 
     def test_default_option_order_is_one_hundred(self):
         option = Option("RTM50C", 50, "C", 1, 1.1, 0)

@@ -6,8 +6,12 @@ case. Tests are kept separately.
 ## Strategy
 
 - Reads `/case`, `/news`, and `/securities` from RIT Client.
+- Sleeps throughout Week 1 and begins evaluating trades at tick 76.
 - Extracts the current week's volatility forecast from news, using the official
   tick boundaries (1–75, 76–150, 151–225, and 226–300).
+- Selects percentages tied to the word `volatility`, so a risk-free-rate value
+  in the same message is not mistaken for volatility. Ranges are ignored, and a
+  cached value is never carried into a new week.
 - Values RTM options with Black–Scholes at executable bid/ask prices.
 - Scores profitable options with a preference for trades that reduce portfolio
   Delta, and may pair two opposite-Delta trades before hedging once.
