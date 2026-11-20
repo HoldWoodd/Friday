@@ -77,7 +77,7 @@ class PendingTender:
 class Runner:
     side: str  # BUY is long; SELL is short.
     quantity: int
-    entry_price: float
+    reference_price: float  # Market VWAP when the protected unwind finishes.
     tender_id: int
 
 
@@ -410,15 +410,25 @@ def manage_pending_tender(
     )
     if unwind_quantity:
         adaptive_tender_unwind(session, pending, unwind, unwind_quantity)
-    runner = (
-        Runner(actual_side, keep, pending.price, pending.tender_id)
-        if keep
-        else None
-    )
+    runner = None
+    if keep:
+        book = get_book(session, ETF)
+        close_levels = book.bids if actual_side == "BUY" else book.asks
+        reference_price = vwap(close_levels, keep)
+        if reference_price is None:
+            print(
+                f"RUNNER skip tender #{pending.tender_id}: insufficient depth; "
+                f"closing retained {keep:,} immediately"
+            )
+            order(session, ETF, unwind, keep, max_chunk=TENDER_UNWIND_CHUNK)
+            keep = 0
+        else:
+            runner = Runner(actual_side, keep, reference_price, pending.tender_id)
     if runner is not None:
         print(
             f"RUNNER open from tender #{pending.tender_id}: side={actual_side}, "
-            f"quantity={keep:,}, take_profit={RUNNER_TAKE_PROFIT_USD:.3f}, "
+            f"quantity={keep:,}, reference={runner.reference_price:.4f}, "
+            f"take_profit={RUNNER_TAKE_PROFIT_USD:.3f}, "
             f"stop_loss={RUNNER_STOP_LOSS_USD:.3f}"
         )
     return False, runner
@@ -433,9 +443,9 @@ def runner_move(book: Book, runner: Runner) -> tuple[float | None, str]:
     if exit_price is None:
         return None, close_action
     move = (
-        exit_price - runner.entry_price
+        exit_price - runner.reference_price
         if runner.side == "BUY"
-        else runner.entry_price - exit_price
+        else runner.reference_price - exit_price
     ) - MARKET_FEE
     return move, close_action
 
