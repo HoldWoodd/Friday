@@ -20,7 +20,10 @@ case. Tests are kept separately.
   that band is allowed only when it reduces existing risk and can be hedged.
 - Treats ±40,000 RTM as a warning level, ±45,000 as the normal hedge-capacity
   boundary, and uses the final 5,000 shares only for emergency Delta control.
-- From tick 275 onward, closes all option positions before one final RTM hedge.
+- During ticks 70–75, 145–150, and 220–225, stops opening positions and flattens
+  the portfolio before the scheduled weekly volatility reset.
+- From tick 275 onward, closes all options and then keeps flattening RTM to zero;
+  it never leaves an old option hedge open after the options are gone.
 
 The official case fine is assessed every second as
 `$0.10 × max(0, |portfolio Delta| - 7,000)`, where portfolio Delta includes the

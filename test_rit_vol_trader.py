@@ -1,11 +1,25 @@
 import unittest
 from rit_vol_trader import (Option, adaptive_quantity, black_scholes, hedge_change,
-    implied_vol, news_vol, option_quantity, portfolio_delta, shifted_bounds, week)
+    implied_vol, news_risk_window, news_vol, option_quantity, portfolio_delta,
+    shifted_bounds, unwind, week)
+
+class FakeAPI:
+    def __init__(self):
+        self.orders = []
+
+    def order(self, ticker, action, quantity):
+        self.orders.append((ticker, action, quantity))
 
 class TraderTests(unittest.TestCase):
     def test_week_boundaries(self):
         self.assertEqual([week(x) for x in (1, 75, 76, 150, 151, 225, 226, 300)],
                          [1, 1, 2, 2, 3, 3, 4, 4])
+
+    def test_news_risk_windows(self):
+        active = (70, 75, 145, 150, 220, 225)
+        inactive = (1, 69, 76, 144, 151, 219, 226, 275)
+        self.assertTrue(all(news_risk_window(x) for x in active))
+        self.assertTrue(all(not news_risk_window(x) for x in inactive))
 
     def test_put_call_parity(self):
         call, call_delta = black_scholes("C", 50, 50, 1 / 12, 0, .2)
@@ -50,6 +64,11 @@ class TraderTests(unittest.TestCase):
 
     def test_projected_bounds_use_both_delta_models(self):
         self.assertEqual(shifted_bounds((0, 0), "BUY", .4, .6, 100), (4000, 6000))
+
+    def test_unwind_flattens_rtm_after_options_are_closed(self):
+        api = FakeAPI()
+        unwind(api, {"position": 50000}, [], .2, True)
+        self.assertEqual(api.orders, [("RTM", "SELL", 10000)] * 5)
 
 if __name__ == "__main__":
     unittest.main()
