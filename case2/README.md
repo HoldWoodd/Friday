@@ -23,6 +23,11 @@ ETF 限制权重按原案例规则恢复为 2 倍。
 Private Tender 提交后会进入最多 10 ticks 的 pending 状态；期间暂停其他 RITC
 策略，持续检测真实持仓变化，避免因结算延迟漏掉 70,000–100,000 份仓位。
 
+Tender 结算后默认平掉 90%，并最多保留 8,000 份同方向 Runner。Runner 每股盈利
+0.10 USD 时止盈、亏损 0.05 USD 时止损，tick 270 强制关闭；新 Tender 出现时也会
+先关闭旧 Runner。可通过 `RIT_RUNNER_FRACTION`、`RIT_RUNNER_MAX_QUANTITY`、
+`RIT_RUNNER_TAKE_PROFIT`、`RIT_RUNNER_STOP_LOSS` 调整，设 fraction 为 0 可关闭。
+
 ## 运行
 
 在 RIT Client 中复制 API key，然后执行：

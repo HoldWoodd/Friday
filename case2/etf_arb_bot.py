@@ -26,6 +26,11 @@ TENDER_RECHECK_SECONDS = 0.25
 TENDER_MAX_PATIENCE_SECONDS = 12.0
 TENDER_MIN_EXIT_EDGE_USD = 0.005
 TENDER_PENDING_TICKS = 10
+RUNNER_FRACTION = float(os.getenv("RIT_RUNNER_FRACTION", "0.10"))
+RUNNER_MAX_QUANTITY = int(os.getenv("RIT_RUNNER_MAX_QUANTITY", "8000"))
+RUNNER_TAKE_PROFIT_USD = float(os.getenv("RIT_RUNNER_TAKE_PROFIT", "0.10"))
+RUNNER_STOP_LOSS_USD = float(os.getenv("RIT_RUNNER_STOP_LOSS", "0.05"))
+RUNNER_FORCE_CLOSE_TICK = int(os.getenv("RIT_RUNNER_FORCE_CLOSE_TICK", "270"))
 ARB_OPEN_EDGE_CAD = float(os.getenv("RIT_ARB_OPEN_EDGE", "0.22"))
 ARB_MIN_ROUND_TRIP_CAD = float(os.getenv("RIT_ARB_ROUND_TRIP", "0.08"))
 ARB_QUANTITY = int(os.getenv("RIT_ARB_QUANTITY", "1000"))
@@ -66,6 +71,14 @@ class PendingTender:
     submitted_tick: int
     quantity: int
     price: float
+
+
+@dataclass
+class Runner:
+    side: str  # BUY is long; SELL is short.
+    quantity: int
+    entry_price: float
+    tender_id: int
 
 
 def api(session: requests.Session, method: str, path: str, **kwargs):
@@ -362,19 +375,19 @@ def adaptive_tender_unwind(
 
 def manage_pending_tender(
     session: requests.Session, pending: PendingTender, tick: int
-) -> bool:
-    """Return True while pending; hedge verified fills and return False when done."""
+) -> tuple[bool, Runner | None]:
+    """Track settlement, lock most profit, and optionally retain a small runner."""
     after = security_position(session, ETF)
     delta = after - pending.before_position
     if delta == 0:
         elapsed = tick - pending.submitted_tick
         if elapsed < TENDER_PENDING_TICKS:
-            return True
+            return True, None
         print(
             f"TENDER #{pending.tender_id}: no fill after {elapsed} ticks; "
             "stopping settlement tracking"
         )
-        return False
+        return False, None
 
     actual_side = "BUY" if delta > 0 else "SELL"
     unwind = "SELL" if delta > 0 else "BUY"
@@ -384,13 +397,70 @@ def manage_pending_tender(
             f"actual {actual_side}; "
             "flattening verified position immediately"
         )
+    keep = 0
+    if actual_side == pending.expected_side and tick < RUNNER_FORCE_CLOSE_TICK:
+        keep = min(
+            RUNNER_MAX_QUANTITY,
+            int(abs(delta) * RUNNER_FRACTION) // 1000 * 1000,
+        )
+    unwind_quantity = abs(delta) - keep
     print(
         f"TENDER #{pending.tender_id}: settled delta={delta:+,}; "
-        f"unwinding {unwind} {abs(delta):,}"
+        f"unwinding {unwind} {unwind_quantity:,}, runner={keep:,}"
     )
-    adaptive_tender_unwind(session, pending, unwind, abs(delta))
-    return False
+    if unwind_quantity:
+        adaptive_tender_unwind(session, pending, unwind, unwind_quantity)
+    runner = (
+        Runner(actual_side, keep, pending.price, pending.tender_id)
+        if keep
+        else None
+    )
+    if runner is not None:
+        print(
+            f"RUNNER open from tender #{pending.tender_id}: side={actual_side}, "
+            f"quantity={keep:,}, take_profit={RUNNER_TAKE_PROFIT_USD:.3f}, "
+            f"stop_loss={RUNNER_STOP_LOSS_USD:.3f}"
+        )
+    return False, runner
     # Tender and unwind create opposite USD cash flows, so no separate FX leg.
+
+
+def runner_move(book: Book, runner: Runner) -> tuple[float | None, str]:
+    """Return executable price move per share and the closing action."""
+    close_action = "SELL" if runner.side == "BUY" else "BUY"
+    levels = book.bids if close_action == "SELL" else book.asks
+    exit_price = vwap(levels, runner.quantity)
+    if exit_price is None:
+        return None, close_action
+    move = (
+        exit_price - runner.entry_price
+        if runner.side == "BUY"
+        else runner.entry_price - exit_price
+    ) - MARKET_FEE
+    return move, close_action
+
+
+def manage_runner(
+    session: requests.Session, runner: Runner, tick: int, force: bool = False
+) -> Runner | None:
+    move, close_action = runner_move(get_book(session, ETF), runner)
+    reason = None
+    if force:
+        reason = "new tender"
+    elif tick >= RUNNER_FORCE_CLOSE_TICK:
+        reason = "time limit"
+    elif move is not None and move >= RUNNER_TAKE_PROFIT_USD:
+        reason = "take profit"
+    elif move is not None and move <= -RUNNER_STOP_LOSS_USD:
+        reason = "stop loss"
+    if reason is None:
+        return runner
+    print(
+        f"RUNNER close tender #{runner.tender_id}: reason={reason}, "
+        f"move={move}, action={close_action}, quantity={runner.quantity:,}"
+    )
+    order(session, ETF, close_action, runner.quantity, max_chunk=TENDER_UNWIND_CHUNK)
+    return None
 
 
 def manage_arbitrage(
@@ -456,7 +526,7 @@ def run() -> None:
         raise SystemExit("Set RIT_API_KEY before starting the bot.")
     with requests.Session() as session:
         session.headers.update({"X-API-Key": API_KEY})
-        seen, lots, pending = set(), [], None
+        seen, lots, pending, runner = set(), [], None, None
         wait_log_tick: dict[int, int] = {}
         arb_scan_log_ticks: set[int] = set()
         last_status = None
@@ -480,6 +550,7 @@ def run() -> None:
                     arb_scan_log_ticks.clear()
                     lots.clear()
                     pending = None
+                    runner = None
                     time.sleep(0.25)
                     continue
                 if case["status"] != "ACTIVE":
@@ -491,14 +562,30 @@ def run() -> None:
                     continue
                 tick = int(case["tick"])
                 if pending is not None:
-                    if not manage_pending_tender(session, pending, tick):
+                    still_pending, new_runner = manage_pending_tender(
+                        session, pending, tick
+                    )
+                    if not still_pending:
                         pending = None
+                        runner = new_runner
                     # Do not trade RITC for another strategy while measuring the
                     # tender's position delta.
                     time.sleep(POLL_SECONDS)
                     continue
 
-                for tender in api(session, "GET", "/tenders"):
+                if runner is not None:
+                    runner = manage_runner(session, runner, tick)
+
+                tenders = api(session, "GET", "/tenders")
+                new_tenders = [
+                    tender
+                    for tender in tenders
+                    if int(tender["tender_id"]) not in seen
+                ]
+                if runner is not None and new_tenders:
+                    runner = manage_runner(session, runner, tick, force=True)
+
+                for tender in new_tenders:
                     tid = int(tender["tender_id"])
                     if tid not in seen:
                         outcome, pending, metrics = handle_tender(
@@ -517,7 +604,7 @@ def run() -> None:
                             wait_log_tick[tid] = tick
                         if pending is not None:
                             break
-                if pending is None and ENABLE_BASKET_ARB:
+                if pending is None and runner is None and ENABLE_BASKET_ARB:
                     manage_arbitrage(session, lots, tick, fx, arb_scan_log_ticks)
             except (requests.RequestException, KeyError, ValueError) as exc:
                 print(f"Loop error: {exc}")

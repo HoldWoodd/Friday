@@ -4,9 +4,11 @@ from unittest.mock import patch
 from etf_arb_bot import (
     Book,
     Level,
+    Runner,
     basket_edges,
     conservative_vwap,
     profitable_unwind_slice,
+    runner_move,
     security_by_ticker,
     tender_can_wait,
     tender_edge_cad,
@@ -88,6 +90,19 @@ class StrategyTest(unittest.TestCase):
         self.assertTrue(tender_can_wait({"expires": 120}, 118))
         self.assertFalse(tender_can_wait({"expires": 120}, 119))
         self.assertFalse(tender_can_wait({}, 100))
+
+    def test_long_runner_uses_bid_and_short_runner_uses_ask(self):
+        book = Book((Level(25.12, 8_000),), (Level(25.18, 8_000),))
+        long_move, long_action = runner_move(
+            book, Runner("BUY", 8_000, 25.00, 1)
+        )
+        short_move, short_action = runner_move(
+            book, Runner("SELL", 8_000, 25.30, 2)
+        )
+        self.assertEqual(long_action, "SELL")
+        self.assertAlmostEqual(long_move, 0.10)
+        self.assertEqual(short_action, "BUY")
+        self.assertAlmostEqual(short_move, 0.10)
 
     @patch("etf_arb_bot.api")
     @patch("etf_arb_bot.position_usage", return_value=(100_000, 40_000))
