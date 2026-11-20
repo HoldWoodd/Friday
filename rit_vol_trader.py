@@ -9,7 +9,7 @@ OPT_GROSS, OPT_NET, ETF_LIMIT = 2500, 1000, 50000
 OPT_ORDER, ETF_ORDER, PER_TICKER = 100, 10000, 400
 DELTA_LIMIT, ENTRY_LIMIT = 7000, 5000
 HEDGE_TRIGGER, HEDGE_TARGET = 2500, 1000
-ETF_WARNING, ETF_RESERVE = 40000, 45000
+ETF_WARNING, ETF_RESERVE = 30000, 35000
 OPT_FEE, ETF_FEE = 2.0, 0.02
 LOG = logging.getLogger("rit-vol-trader")
 OPT_RE = re.compile(r"^RTM(\d+(?:\.\d+)?)([CP])$")
@@ -132,11 +132,10 @@ def worst_delta(bounds):
     return max(abs(bounds[0]), abs(bounds[1]))
 
 def planned_hedge(position, bounds, limit):
-    if worst_delta(bounds) <= HEDGE_TRIGGER:
-        return 0
     midpoint = sum(bounds) / 2
-    target = math.copysign(HEDGE_TARGET, midpoint)
-    desired = max(-limit, min(limit, position + round(target - midpoint)))
+    desired = position if worst_delta(bounds) <= HEDGE_TRIGGER else position + round(
+        math.copysign(HEDGE_TARGET, midpoint) - midpoint)
+    desired = max(-limit, min(limit, desired))
     return desired - position
 
 def adaptive_quantity(options, target, action, forecast_delta, market_delta,
@@ -168,6 +167,28 @@ def portfolio_delta_bounds(etf_position, options, spot, years, rate, forecast_vo
         market_value += option.position * market_delta * MULT
     return min(forecast, market_value), max(forecast, market_value)
 
+def risk_reduction(options, position, bounds, spot, years, rate, forecast_vol):
+    change = planned_hedge(position, bounds, ETF_RESERVE)
+    current = worst_delta((bounds[0] + change, bounds[1] + change))
+    if current < ENTRY_LIMIT:
+        return None
+    best = None
+    for option in options:
+        if not option.position:
+            continue
+        action = "SELL" if option.position > 0 else "BUY"
+        quantity = min(50, abs(option.position))
+        forecast_delta = black_scholes(option.kind, spot, option.strike, years, rate, forecast_vol)[1]
+        market_vol = implied_vol(option.kind, (option.bid + option.ask) / 2,
+                                 spot, option.strike, years, rate) or forecast_vol
+        market_delta = black_scholes(option.kind, spot, option.strike, years, rate, market_vol)[1]
+        reduced = shifted_bounds(bounds, action, forecast_delta, market_delta, quantity)
+        hedge = planned_hedge(position, reduced, ETF_RESERVE)
+        improvement = current - worst_delta((reduced[0] + hedge, reduced[1] + hedge))
+        if improvement > 0 and (best is None or improvement > best[0]):
+            best = improvement, option, action, quantity
+    return best[1:] if best else None
+
 def portfolio_delta(etf_position, options, spot, years, rate, vol):
     return sum(portfolio_delta_bounds(etf_position, options, spot, years, rate, vol)) / 2
 
@@ -189,13 +210,19 @@ def state(api, vol):
     return case, etf, options, spot, years, raw_rate / 100 if raw_rate > 1 else raw_rate, vol
 
 def hedge_change(position, bounds):
-    limit = ETF_LIMIT if worst_delta(bounds) > 4500 else ETF_RESERVE
-    return planned_hedge(position, bounds, limit)
+    return planned_hedge(position, bounds, ETF_RESERVE)
 
 def hedge(api, vol, live):
     _, etf, options, spot, years, rate, _ = state(api, vol)
     position = int(etf.get("position", 0))
     bounds = portfolio_delta_bounds(position, options, spot, years, rate, vol)
+    reduction = risk_reduction(options, position, bounds, spot, years, rate, vol)
+    if reduction:
+        option, action, quantity = reduction
+        LOG.info("reduce risk %s %s x%d risk_delta=[%.0f, %.0f]", action,
+                 option.ticker, quantity, *bounds)
+        send(api, option.ticker, quantity if action == "BUY" else -quantity, 100, live)
+        return
     change = hedge_change(position, bounds)
     if change:
         LOG.info("hedge risk_delta=[%.0f, %.0f] change=%d", *bounds, change)
