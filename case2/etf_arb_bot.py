@@ -26,9 +26,9 @@ TENDER_RECHECK_SECONDS = 0.25
 TENDER_MAX_PATIENCE_SECONDS = 12.0
 TENDER_MIN_EXIT_EDGE_USD = 0.005
 TENDER_PENDING_TICKS = 10
-ARB_OPEN_EDGE_CAD = 0.35
-ARB_MIN_ROUND_TRIP_CAD = 0.12
-ARB_QUANTITY = 2_000
+ARB_OPEN_EDGE_CAD = float(os.getenv("RIT_ARB_OPEN_EDGE", "0.22"))
+ARB_MIN_ROUND_TRIP_CAD = float(os.getenv("RIT_ARB_ROUND_TRIP", "0.08"))
+ARB_QUANTITY = int(os.getenv("RIT_ARB_QUANTITY", "1000"))
 MAX_REASONABLE_ARB_EDGE_CAD = 2.00
 STOP_OPENING_AT_TICK = int(os.getenv("RIT_STOP_OPENING_AT_TICK", "270"))
 FORCE_CLOSE_AT_TICK = int(os.getenv("RIT_FORCE_CLOSE_AT_TICK", "285"))
@@ -393,7 +393,13 @@ def manage_pending_tender(
     # Tender and unwind create opposite USD cash flows, so no separate FX leg.
 
 
-def manage_arbitrage(session: requests.Session, lots: list[ArbLot], tick: int, fx: float) -> None:
+def manage_arbitrage(
+    session: requests.Session,
+    lots: list[ArbLot],
+    tick: int,
+    fx: float,
+    scan_log_ticks: set[int],
+) -> None:
     etf, bull, bear = get_book(session, ETF), get_book(session, BULL), get_book(session, BEAR)
     if lots:
         lot = lots[0]
@@ -423,6 +429,12 @@ def manage_arbitrage(session: requests.Session, lots: list[ArbLot], tick: int, f
     if tick >= STOP_OPENING_AT_TICK or not within_limits(session, basket_gross):
         return
     rich, cheap = basket_edges(etf, bull, bear, ARB_QUANTITY, fx)
+    if tick % 10 == 0 and tick not in scan_log_ticks:
+        print(
+            f"ARB scan tick={tick}: rich={rich}, cheap={cheap}, "
+            f"open_threshold={ARB_OPEN_EDGE_CAD:.3f}"
+        )
+        scan_log_ticks.add(tick)
     if any(
         edge is not None and abs(edge) > MAX_REASONABLE_ARB_EDGE_CAD
         for edge in (rich, cheap)
@@ -446,6 +458,7 @@ def run() -> None:
         session.headers.update({"X-API-Key": API_KEY})
         seen, lots, pending = set(), [], None
         wait_log_tick: dict[int, int] = {}
+        arb_scan_log_ticks: set[int] = set()
         last_status = None
         print(f"ETF arbitrage bot connected to {API_URL}")
         print(
@@ -464,6 +477,7 @@ def run() -> None:
                     # lots so a new heat starts with clean strategy state.
                     seen.clear()
                     wait_log_tick.clear()
+                    arb_scan_log_ticks.clear()
                     lots.clear()
                     pending = None
                     time.sleep(0.25)
@@ -504,7 +518,7 @@ def run() -> None:
                         if pending is not None:
                             break
                 if pending is None and ENABLE_BASKET_ARB:
-                    manage_arbitrage(session, lots, tick, fx)
+                    manage_arbitrage(session, lots, tick, fx, arb_scan_log_ticks)
             except (requests.RequestException, KeyError, ValueError) as exc:
                 print(f"Loop error: {exc}")
             time.sleep(POLL_SECONDS)

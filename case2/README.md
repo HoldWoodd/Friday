@@ -73,7 +73,7 @@ python -m unittest -v
 反映下单前的显示盘口；三腿交易也不是原子成交，所以代码不能保证利润。
 
 ETF 三腿套利包含两个方向：RITC 偏贵时卖 RITC、买 BULL 和 BEAR；RITC 偏便宜
-时买 RITC、卖 BULL 和 BEAR。开仓门槛为 0.35 CAD/份，每次 2,000 份，当前默认
+时买 RITC、卖 BULL 和 BEAR。开仓门槛为 0.22 CAD/份，每次 1,000 份，当前默认
 开启。如需比赛时临时关闭：
 
 ```bash
@@ -81,4 +81,6 @@ export RIT_ENABLE_BASKET_ARB=0
 ```
 
 三腿订单不是原子成交，而且 Converter 只能手动操作，因此该策略的滑点风险高于
-Tender。程序会在启动时明确打印两类策略是否开启。
+Tender。较低门槛配合较小仓位，用于增加机会但限制单次滑点；程序每 10 ticks
+打印一次 `ARB scan`，即使没有下单也能看到实时 rich/cheap 价差。参数可通过
+`RIT_ARB_OPEN_EDGE`、`RIT_ARB_ROUND_TRIP` 和 `RIT_ARB_QUANTITY` 调整。
