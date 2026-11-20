@@ -29,8 +29,10 @@ class API:
         self.session = requests.Session()
         self.session.headers["X-API-Key"] = key
 
-    def get(self, path):
-        response = self.session.get(self.url + path, timeout=self.timeout)
+    def get(self, path, params=None):
+        response = self.session.get(
+            self.url + path, params=params, timeout=self.timeout
+        )
         response.raise_for_status()
         return response.json()
 
@@ -81,9 +83,14 @@ def news_vol(news, tick):
         text = f'{item.get("headline", "")} {item.get("body", "")}'
         label_text = f'{item.get("ticker", "")} {item.get("symbol", "")} {text}'
         values = []
-        for match in re.finditer(r"(\d+(?:\.\d+)?)\s*%", text):
-            context = text[max(0, match.start() - 80):match.start()]
-            if re.search(r"volatil", context, re.I):
+        for match in re.finditer(r"(\d+(?:\.\d+)?)\s*[%％]", text):
+            # Associate each percentage with the most recent subject in the
+            # full text.  The old 80-character window missed the initial news
+            # on deployments whose wording is longer.
+            prefix = text[:match.start()].lower()
+            volatility_at = prefix.rfind("volatil")
+            rate_at = max(prefix.rfind("risk free"), prefix.rfind("interest rate"))
+            if volatility_at >= 0 and volatility_at > rate_at:
                 values.append(float(match.group(1)) / 100)
         if not values:
             continue
@@ -264,9 +271,13 @@ def run(args):
             tick = int(case["tick"])
             if tick >= TICKS:
                 return
-            vol = current_vol(args.vol, api.get("/news"), tick, cache)
+            news = api.get("/news", params={"limit": 100})
+            vol = current_vol(args.vol, news, tick, cache)
             if not vol:
-                raise RuntimeError("no current volatility forecast")
+                labels = [str(item.get("ticker", "")) for item in news[:5]]
+                raise RuntimeError(
+                    f"no current volatility forecast; news={len(news)} labels={labels}"
+                )
             _, etf, options, spot, years, rate, _ = state(api, vol)
             if tick >= 275 or news_risk_window(tick):
                 reason = "close" if tick >= 275 else "news"

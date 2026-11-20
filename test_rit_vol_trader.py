@@ -42,6 +42,14 @@ class TraderTests(unittest.TestCase):
             "The current risk free rate is 0%. RTM current annualized realized volatility is 35%."}]
         self.assertEqual(news_vol(news, 1), .35)
 
+    def test_initial_news_with_long_wording_and_full_width_percent(self):
+        news = [{"tick": 1, "ticker": "Week 1", "body":
+            "The current risk free rate is 0%. RTM is an ETF that mimics one "
+            "of the major indices in the simulated world and its current "
+            "annualized realized volatility, according to the latest "
+            "available market observation, is 32％."}]
+        self.assertEqual(news_vol(news, 20), .32)
+
     def test_news_ignores_labeled_volatility_range(self):
         news = [{"tick": 74, "ticker": "Week 2", "body":
             "Week 2 volatility will be between 27% and 30%."}]
