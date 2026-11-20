@@ -6,7 +6,9 @@ import requests
 
 TICKS, DAYS, MULT = 300, 20, 100
 OPT_GROSS, OPT_NET, ETF_LIMIT = 2500, 1000, 50000
-OPT_ORDER, ETF_ORDER, PER_TICKER = 50, 10000, 400
+OPT_ORDER, ETF_ORDER, PER_TICKER = 100, 10000, 400
+HEDGE_TRIGGER, HEDGE_TARGET = 3000, 1000
+ETF_WARNING, ETF_RESERVE = 40000, 45000
 OPT_FEE, ETF_FEE = 2.0, 0.02
 LOG = logging.getLogger("rit-vol-trader")
 OPT_RE = re.compile(r"^RTM(\d+(?:\.\d+)?)([CP])$")
@@ -95,6 +97,27 @@ def option_quantity(options, target, action, requested=OPT_ORDER):
             break
     return quantity
 
+def projected_options(options, target, action, quantity):
+    direction = 1 if action == "BUY" else -1
+    return [Option(x.ticker, x.strike, x.kind, x.bid, x.ask,
+        x.position + direction * quantity if x.ticker == target.ticker else x.position)
+        for x in options]
+
+def adaptive_quantity(options, target, action, option_delta, total_delta, etf_position, requested=OPT_ORDER):
+    capacity = option_quantity(options, target, action, requested)
+    direction = 1 if action == "BUY" else -1
+    for quantity in dict.fromkeys((min(100, capacity), min(50, capacity), min(25, capacity))):
+        if quantity <= 0:
+            continue
+        projected = total_delta + direction * option_delta * MULT * quantity
+        target_delta = math.copysign(HEDGE_TARGET, projected) if abs(projected) > HEDGE_TRIGGER else projected
+        desired_etf = etf_position + round(target_delta - projected)
+        if abs(etf_position) >= ETF_WARNING and abs(desired_etf) >= abs(etf_position):
+            continue
+        if abs(desired_etf) <= ETF_RESERVE:
+            return quantity
+    return 0
+
 def portfolio_delta(etf_position, options, spot, years, rate, vol):
     total = float(etf_position)
     for option in options:
@@ -118,13 +141,21 @@ def state(api, vol):
     raw_rate = float(etf.get("interest_rate", 0))
     return case, etf, options, spot, years, raw_rate / 100 if raw_rate > 1 else raw_rate, vol
 
+def hedge_change(position, delta):
+    if abs(delta) <= HEDGE_TRIGGER:
+        return 0
+    target = math.copysign(HEDGE_TARGET, delta)
+    limit = ETF_LIMIT if abs(delta) > 5000 else ETF_RESERVE
+    desired = max(-limit, min(limit, position + round(target - delta)))
+    return desired - position
+
 def hedge(api, vol, live):
     _, etf, options, spot, years, rate, _ = state(api, vol)
     position = int(etf.get("position", 0))
     delta = portfolio_delta(position, options, spot, years, rate, vol)
-    if abs(delta) >= 2500:
-        desired = max(-ETF_LIMIT, min(ETF_LIMIT, position - round(delta)))
-        send(api, "RTM", desired - position, ETF_ORDER, live)
+    change = hedge_change(position, delta)
+    if change:
+        send(api, "RTM", change, ETF_ORDER, live)
 
 def run(args):
     api, cached = API(args.url, args.key), None
@@ -140,13 +171,16 @@ def run(args):
             cached = vol
             _, etf, options, spot, years, rate, _ = state(api, vol)
             if tick >= 275:
-                target = next((x for x in options if x.position), None)
-                if target:
-                    send(api, target.ticker, -max(-50, min(50, target.position)), 100, args.live)
+                open_options = [x for x in options if x.position]
+                for target in open_options:
+                    send(api, target.ticker, -target.position, 100, args.live)
+                if open_options:
                     hedge(api, vol, args.live)
                 time.sleep(args.poll)
                 continue
-            best = None
+            etf_position = int(etf.get("position", 0))
+            total_delta = portfolio_delta(etf_position, options, spot, years, rate, vol)
+            candidates = []
             for option in options:
                 if option.bid <= 0 or option.ask <= 0:
                     continue
@@ -155,15 +189,32 @@ def run(args):
                 trades = (("BUY", (fair - option.ask) * MULT - fee, option.ask),
                           ("SELL", (option.bid - fair) * MULT - fee, option.bid))
                 for action, edge, price in trades:
-                    if edge >= args.edge and (best is None or edge > best[0]):
-                        best = edge, option, action, fair, price
-            if best:
-                edge, option, action, fair, price = best
-                quantity = option_quantity(options, option, action, args.size)
-                if quantity:
-                    LOG.info("signal %s %s x%d fair=%.3f market=%.3f edge=$%.2f", action, option.ticker, quantity, fair, price, edge)
-                    send(api, option.ticker, quantity if action == "BUY" else -quantity, 100, args.live)
-                    hedge(api, vol, args.live)
+                    if edge >= args.edge:
+                        signed_delta = delta * (1 if action == "BUY" else -1)
+                        relief = abs(total_delta) - abs(total_delta + signed_delta * MULT * 50)
+                        candidates.append((edge + max(0, relief) / 500, edge, option,
+                                           action, fair, price, signed_delta))
+            candidates.sort(reverse=True, key=lambda x: x[0])
+            batch, working_options, working_delta = [], options, total_delta
+            for candidate in candidates:
+                _, edge, option, action, fair, price, signed_delta = candidate
+                if batch and signed_delta * batch[0][-1] >= 0:
+                    continue
+                raw_delta = signed_delta if action == "BUY" else -signed_delta
+                quantity = adaptive_quantity(working_options, option, action, raw_delta,
+                                             working_delta, etf_position, args.size)
+                new_delta = working_delta + signed_delta * MULT * quantity
+                if quantity and (not batch or abs(new_delta) < abs(working_delta)):
+                    batch.append((edge, option, action, fair, price, quantity, signed_delta))
+                    working_options = projected_options(working_options, option, action, quantity)
+                    working_delta = new_delta
+                if len(batch) == 2:
+                    break
+            for edge, option, action, fair, price, quantity, _ in batch:
+                LOG.info("signal %s %s x%d fair=%.3f market=%.3f edge=$%.2f", action, option.ticker, quantity, fair, price, edge)
+                send(api, option.ticker, quantity if action == "BUY" else -quantity, 100, args.live)
+            if batch:
+                hedge(api, vol, args.live)
             else:
                 hedge(api, vol, args.live)
             time.sleep(args.poll)

@@ -1,5 +1,6 @@
 import unittest
-from rit_vol_trader import Option, black_scholes, news_vol, option_quantity, portfolio_delta, week
+from rit_vol_trader import (Option, adaptive_quantity, black_scholes, hedge_change,
+    news_vol, option_quantity, portfolio_delta, week)
 
 class TraderTests(unittest.TestCase):
     def test_week_boundaries(self):
@@ -16,9 +17,9 @@ class TraderTests(unittest.TestCase):
                 {"tick": 1, "body": "Week 1 volatility is 20%"}]
         self.assertEqual(news_vol(news, 76), .28)
 
-    def test_default_option_order_is_fifty(self):
+    def test_default_option_order_is_one_hundred(self):
         option = Option("RTM50C", 50, "C", 1, 1.1, 0)
-        self.assertEqual(option_quantity([option], option, "BUY"), 50)
+        self.assertEqual(option_quantity([option], option, "BUY"), 100)
 
     def test_quantity_respects_ticker_limit(self):
         option = Option("RTM50C", 50, "C", 1, 1.1, 390)
@@ -27,6 +28,15 @@ class TraderTests(unittest.TestCase):
     def test_delta_uses_contract_multiplier(self):
         option = Option("RTM50C", 50, "C", 1, 1.1, 10)
         self.assertGreater(portfolio_delta(0, [option], 50, 1 / 12, 0, .2), 500)
+
+    def test_hedge_uses_a_band_instead_of_zero(self):
+        self.assertEqual(hedge_change(0, 4000), -3000)
+        self.assertEqual(hedge_change(0, 2500), 0)
+
+    def test_adaptive_size_preserves_etf_reserve(self):
+        option = Option("RTM50P", 50, "P", 1, 1.1, 0)
+        self.assertEqual(adaptive_quantity([option], option, "BUY", -.5, 0, 0), 100)
+        self.assertEqual(adaptive_quantity([option], option, "BUY", -.5, -5000, 44000), 0)
 
 if __name__ == "__main__":
     unittest.main()

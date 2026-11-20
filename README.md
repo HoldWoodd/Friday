@@ -1,21 +1,22 @@
 # RITCx Volatility Trader
 
 `rit_vol_trader.py` is a compact, aggressive trader for the RIT volatility
-case. The complete live strategy is 190 lines; tests are kept separately.
+case. Tests are kept separately.
 
 ## Strategy
 
 - Reads `/case`, `/news`, and `/securities` from RIT Client.
 - Extracts the current week's volatility forecast from news.
 - Values RTM options with Black–Scholes at executable bid/ask prices.
-- Buys or sells the option with the largest estimated edge.
-- Sends 50 contracts per order by default.
-- Shrinks an order only near the published limits: 400 contracts per ticker,
-  2,500 option gross, or ±1,000 option net.
-- Delta-hedges with RTM immediately after an option order and whenever absolute
-  portfolio Delta reaches 2,500.
-- Keeps RTM inside its ±50,000 hard position limit.
-- From tick 275 onward, closes option positions 50 contracts at a time.
+- Scores profitable options with a preference for trades that reduce portfolio
+  Delta, and may pair two opposite-Delta trades before hedging once.
+- Requests 100 contracts by default, then selects 100, 50, 25, or zero based on
+  projected Delta, ETF hedge capacity, and the published option limits.
+- Uses a hysteresis hedge: RTM trading starts beyond ±3,000 portfolio Delta and
+  targets ±1,000 instead of repeatedly returning to zero.
+- Treats ±40,000 RTM as a warning level, ±45,000 as the normal hedge-capacity
+  boundary, and uses the final 5,000 shares only for emergency Delta control.
+- From tick 275 onward, closes all option positions before one final RTM hedge.
 
 The REST feed does not expose a live fine total, so the program cannot measure
 `fines / P&L` reliably. It stays inside the published position limits to target
@@ -43,7 +44,7 @@ Useful overrides:
 
 ```bash
 python rit_vol_trader.py \
-  --size 50 \
+  --size 100 \
   --edge 5 \
   --poll 0.5 \
   --vol 20
