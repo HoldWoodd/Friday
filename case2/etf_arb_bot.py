@@ -26,10 +26,11 @@ TENDER_RECHECK_SECONDS = 0.25
 TENDER_MAX_PATIENCE_SECONDS = 12.0
 TENDER_MIN_EXIT_EDGE_USD = 0.005
 TENDER_PENDING_TICKS = 10
-RUNNER_FRACTION = float(os.getenv("RIT_RUNNER_FRACTION", "0.10"))
-RUNNER_MAX_QUANTITY = int(os.getenv("RIT_RUNNER_MAX_QUANTITY", "8000"))
-RUNNER_TAKE_PROFIT_USD = float(os.getenv("RIT_RUNNER_TAKE_PROFIT", "0.10"))
-RUNNER_STOP_LOSS_USD = float(os.getenv("RIT_RUNNER_STOP_LOSS", "0.05"))
+RUNNER_FRACTION = float(os.getenv("RIT_RUNNER_FRACTION", "0.05"))
+RUNNER_MAX_QUANTITY = int(os.getenv("RIT_RUNNER_MAX_QUANTITY", "3000"))
+RUNNER_TAKE_PROFIT_USD = float(os.getenv("RIT_RUNNER_TAKE_PROFIT", "0.08"))
+RUNNER_STOP_LOSS_USD = float(os.getenv("RIT_RUNNER_STOP_LOSS", "0.03"))
+RUNNER_MAX_HOLD_TICKS = int(os.getenv("RIT_RUNNER_MAX_HOLD_TICKS", "20"))
 RUNNER_FORCE_CLOSE_TICK = int(os.getenv("RIT_RUNNER_FORCE_CLOSE_TICK", "270"))
 ARB_OPEN_EDGE_CAD = float(os.getenv("RIT_ARB_OPEN_EDGE", "0.22"))
 ARB_MIN_ROUND_TRIP_CAD = float(os.getenv("RIT_ARB_ROUND_TRIP", "0.08"))
@@ -79,6 +80,7 @@ class Runner:
     quantity: int
     reference_price: float  # Market VWAP when the protected unwind finishes.
     tender_id: int
+    opened_tick: int
 
 
 def api(session: requests.Session, method: str, path: str, **kwargs):
@@ -423,7 +425,9 @@ def manage_pending_tender(
             order(session, ETF, unwind, keep, max_chunk=TENDER_UNWIND_CHUNK)
             keep = 0
         else:
-            runner = Runner(actual_side, keep, reference_price, pending.tender_id)
+            runner = Runner(
+                actual_side, keep, reference_price, pending.tender_id, tick
+            )
     if runner is not None:
         print(
             f"RUNNER open from tender #{pending.tender_id}: side={actual_side}, "
@@ -459,6 +463,8 @@ def manage_runner(
         reason = "new tender"
     elif tick >= RUNNER_FORCE_CLOSE_TICK:
         reason = "time limit"
+    elif tick - runner.opened_tick >= RUNNER_MAX_HOLD_TICKS:
+        reason = "max hold"
     elif move is not None and move >= RUNNER_TAKE_PROFIT_USD:
         reason = "take profit"
     elif move is not None and move <= -RUNNER_STOP_LOSS_USD:

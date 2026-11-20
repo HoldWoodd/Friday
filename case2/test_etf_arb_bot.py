@@ -7,6 +7,7 @@ from etf_arb_bot import (
     Runner,
     basket_edges,
     conservative_vwap,
+    manage_runner,
     profitable_unwind_slice,
     runner_move,
     security_by_ticker,
@@ -94,15 +95,25 @@ class StrategyTest(unittest.TestCase):
     def test_long_runner_uses_bid_and_short_runner_uses_ask(self):
         book = Book((Level(25.12, 8_000),), (Level(25.18, 8_000),))
         long_move, long_action = runner_move(
-            book, Runner("BUY", 8_000, 25.00, 1)
+            book, Runner("BUY", 8_000, 25.00, 1, 100)
         )
         short_move, short_action = runner_move(
-            book, Runner("SELL", 8_000, 25.30, 2)
+            book, Runner("SELL", 8_000, 25.30, 2, 100)
         )
         self.assertEqual(long_action, "SELL")
         self.assertAlmostEqual(long_move, 0.10)
         self.assertEqual(short_action, "BUY")
         self.assertAlmostEqual(short_move, 0.10)
+
+    @patch("etf_arb_bot.order")
+    @patch("etf_arb_bot.get_book")
+    def test_runner_closes_after_max_hold(self, mock_book, mock_order):
+        mock_book.return_value = Book(
+            (Level(25.00, 3_000),), (Level(25.02, 3_000),)
+        )
+        runner = Runner("BUY", 3_000, 25.00, 7, 100)
+        self.assertIsNone(manage_runner(object(), runner, 120))
+        mock_order.assert_called_once()
 
     @patch("etf_arb_bot.api")
     @patch("etf_arb_bot.position_usage", return_value=(100_000, 40_000))
