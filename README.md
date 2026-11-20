@@ -6,22 +6,29 @@ case. Tests are kept separately.
 ## Strategy
 
 - Reads `/case`, `/news`, and `/securities` from RIT Client.
-- Extracts the current week's volatility forecast from news.
+- Extracts the current week's volatility forecast from news, using the official
+  tick boundaries (1–75, 76–150, 151–225, and 226–300).
 - Values RTM options with Black–Scholes at executable bid/ask prices.
 - Scores profitable options with a preference for trades that reduce portfolio
   Delta, and may pair two opposite-Delta trades before hedging once.
 - Requests 100 contracts by default, then selects 100, 50, 25, or zero based on
   projected Delta, ETF hedge capacity, and the published option limits.
-- Uses a hysteresis hedge: RTM trading starts beyond ±3,000 portfolio Delta and
+- Uses a hysteresis hedge: RTM trading starts beyond ±2,500 portfolio Delta and
   targets ±1,000 instead of repeatedly returning to zero.
+- Checks portfolio Delta with both the news forecast and option-implied
+  volatility. New option risk normally stays within ±5,000; a trade outside
+  that band is allowed only when it reduces existing risk and can be hedged.
 - Treats ±40,000 RTM as a warning level, ±45,000 as the normal hedge-capacity
   boundary, and uses the final 5,000 shares only for emergency Delta control.
 - From tick 275 onward, closes all option positions before one final RTM hedge.
 
-The REST feed does not expose a live fine total, so the program cannot measure
-`fines / P&L` reliably. It stays inside the published position limits to target
-limit fines below the requested 3% of P&L. Option and initial hedge fees are
-deducted from every signal's estimated edge.
+The official case fine is assessed every second as
+`$0.10 × max(0, |portfolio Delta| - 7,000)`, where portfolio Delta includes the
+RTM position plus every option's Delta times 100. The internal ±2,500 hedge
+trigger and ±5,000 entry guard leave a buffer below that threshold. They reduce
+fine risk but cannot guarantee a fixed `fines / P&L` ratio because future P&L is
+unknown. Option and initial hedge fees are deducted from each signal's estimated
+edge.
 
 ## Install and test
 
