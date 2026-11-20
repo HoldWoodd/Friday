@@ -4,7 +4,7 @@ import argparse, logging, math, os, re, time
 from dataclasses import dataclass
 import requests
 
-TICKS, DAYS, MULT, START_TICK = 300, 20, 100, 76
+TICKS, DAYS, MULT = 300, 20, 100
 OPT_GROSS, OPT_NET, ETF_LIMIT = 2500, 1000, 50000
 OPT_ORDER, ETF_ORDER, PER_TICKER = 100, 10000, 400
 DELTA_LIMIT, ENTRY_LIMIT = 7000, 5000
@@ -264,10 +264,6 @@ def run(args):
             tick = int(case["tick"])
             if tick >= TICKS:
                 return
-            if tick < START_TICK:
-                LOG.info("week 1 sleep tick=%d", tick)
-                time.sleep(args.poll)
-                continue
             vol = current_vol(args.vol, api.get("/news"), tick, cache)
             if not vol:
                 raise RuntimeError("no current volatility forecast")

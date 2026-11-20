@@ -6,7 +6,6 @@ case. Tests are kept separately.
 ## Strategy
 
 - Reads `/case`, `/news`, and `/securities` from RIT Client.
-- Sleeps throughout Week 1 and begins evaluating trades at tick 76.
 - Extracts the current week's volatility forecast from news, using the official
   tick boundaries (1–75, 76–150, 151–225, and 226–300).
 - Selects percentages tied to the word `volatility`, so a risk-free-rate value
