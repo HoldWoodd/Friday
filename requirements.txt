@@ -1,1 +1,134 @@
 requests>=2.31,<3
+"""etf_arb_bot.py --wdir
+ETF arbitrage bot connected to http://localhost:9999/v1
+Strategies: tender=ON, ETF-rich/ETF-cheap=ON, USD-hedge=OFF
+Case status: STOPPED
+Case status: ACTIVE
+ARB scan tick=0: rich=-0.1287535000000022, cheap=-0.1312504999999933, open_threshold=0.220
+ARB scan tick=10: rich=-0.17257499999999598, cheap=-0.08727500000000116, open_threshold=0.220
+ARB scan tick=20: rich=-0.16435299999999997, cheap=0.014898000000000744, open_threshold=0.220
+TENDER accept #120: side=SELL, quantity=75,000, sample_edge=0.175, full_edge=0.129, visible=100%
+TENDER #120: submitted; tracking settlement for 10 ticks
+TENDER #120: settled delta=-75,000; unwinding BUY 75,000
+TENDER #120: BUY 5,000 @ est 25.1100, edge 0.1800, left 70,000
+TENDER #120: BUY 5,000 @ est 25.1400, edge 0.1500, left 65,000
+TENDER #120: BUY 5,000 @ est 25.1998, edge 0.0902, left 60,000
+TENDER #120: BUY 5,000 @ est 25.1800, edge 0.1100, left 55,000
+TENDER #120: BUY 5,000 @ est 25.1800, edge 0.1100, left 50,000
+TENDER #120: BUY 5,000 @ est 25.2100, edge 0.0800, left 45,000
+TENDER #120: BUY 5,000 @ est 25.2354, edge 0.0546, left 40,000
+TENDER #120: BUY 5,000 @ est 25.2200, edge 0.0700, left 35,000
+TENDER #120: BUY 5,000 @ est 25.2280, edge 0.0620, left 30,000
+TENDER #120: BUY 5,000 @ est 25.2240, edge 0.0660, left 25,000
+TENDER #120: BUY 5,000 @ est 25.2100, edge 0.0800, left 20,000
+TENDER #120: BUY 5,000 @ est 25.2116, edge 0.0784, left 15,000
+TENDER #120: BUY 5,000 @ est 25.2100, edge 0.0800, left 10,000
+TENDER #120: BUY 5,000 @ est 25.2000, edge 0.0900, left 5,000
+TENDER #120: BUY 5,000 @ est 25.2000, edge 0.0900, left 0
+TENDER #120: unwind complete; price-protected quantity 75,000/75,000
+ARB scan tick=30: rich=-0.17701399999999518, cheap=-0.03234999999999993, open_threshold=0.220
+ARB scan tick=40: rich=-0.1828599999999977, cheap=-0.08687000000000254, open_threshold=0.220
+ARB scan tick=50: rich=-0.12476899999999788, cheap=-0.042973000000000795, open_threshold=0.220
+TENDER wait #620: sample_edge=0.04981499999999674, full_edge=0.04981499999999674, visible=100%, expires=59
+TENDER wait #620: sample_edge=0.04428056179999706, full_edge=0.009097725793103221, visible=100%, expires=59
+TENDER accept #620: side=SELL, quantity=87,000, sample_edge=0.050, full_edge=0.005, visible=100%
+TENDER #620: submitted; tracking settlement for 10 ticks
+TENDER #620: settled delta=-87,000; unwinding BUY 87,000
+TENDER #620: BUY 5,000 @ est 24.9200, edge 0.0500, left 82,000
+TENDER #620: BUY 5,000 @ est 24.9200, edge 0.0500, left 77,000
+TENDER #620: BUY 5,000 @ est 24.9200, edge 0.0500, left 72,000
+TENDER #620: BUY 5,000 @ est 24.9300, edge 0.0400, left 67,000
+TENDER #620: BUY 5,000 @ est 24.9300, edge 0.0400, left 62,000
+TENDER #620: BUY 5,000 @ est 24.9277, edge 0.0423, left 57,000
+TENDER #620: BUY 5,000 @ est 24.9100, edge 0.0600, left 52,000
+TENDER #620: BUY 5,000 @ est 24.9100, edge 0.0600, left 47,000
+TENDER #620: BUY 5,000 @ est 24.9010, edge 0.0690, left 42,000
+TENDER #620: BUY 5,000 @ est 24.9100, edge 0.0600, left 37,000
+TENDER #620: BUY 5,000 @ est 24.9100, edge 0.0600, left 32,000
+TENDER #620: BUY 5,000 @ est 24.9000, edge 0.0700, left 27,000
+TENDER #620: BUY 5,000 @ est 24.9000, edge 0.0700, left 22,000
+TENDER #620: BUY 5,000 @ est 24.9060, edge 0.0640, left 17,000
+TENDER #620: BUY 5,000 @ est 24.9100, edge 0.0600, left 12,000
+TENDER #620: BUY 5,000 @ est 24.9200, edge 0.0500, left 7,000
+TENDER #620: BUY 5,000 @ est 24.9200, edge 0.0500, left 2,000
+TENDER #620: BUY 2,000 @ est 24.9270, edge 0.0430, left 0
+TENDER #620: unwind complete; price-protected quantity 87,000/87,000
+ARB scan tick=60: rich=-0.07986800000000047, cheap=-0.10906119999999683, open_threshold=0.220
+ARB scan tick=70: rich=-0.21928000000000192, cheap=-0.010539999999999564, open_threshold=0.220
+ARB scan tick=80: rich=-0.1658499999999999, cheap=-0.013699999999999199, open_threshold=0.220
+TENDER accept #1120: side=BUY, quantity=78,000, sample_edge=0.124, full_edge=0.096, visible=100%
+TENDER #1120: submitted; tracking settlement for 10 ticks
+TENDER #1120: settled delta=+78,000; unwinding SELL 78,000
+TENDER #1120: SELL 5,000 @ est 24.9100, edge 0.1600, left 73,000
+TENDER #1120: SELL 5,000 @ est 24.9100, edge 0.1600, left 68,000
+TENDER #1120: SELL 5,000 @ est 24.9100, edge 0.1600, left 63,000
+TENDER #1120: SELL 5,000 @ est 24.9100, edge 0.1600, left 58,000
+TENDER #1120: SELL 5,000 @ est 24.9100, edge 0.1600, left 53,000
+TENDER #1120: SELL 5,000 @ est 24.9100, edge 0.1600, left 48,000
+TENDER #1120: SELL 5,000 @ est 24.9100, edge 0.1600, left 43,000
+TENDER #1120: SELL 5,000 @ est 24.9100, edge 0.1600, left 38,000
+TENDER #1120: SELL 5,000 @ est 24.9100, edge 0.1600, left 33,000
+TENDER #1120: SELL 5,000 @ est 24.9100, edge 0.1600, left 28,000
+TENDER #1120: SELL 5,000 @ est 24.8700, edge 0.1200, left 23,000
+TENDER #1120: SELL 5,000 @ est 24.8800, edge 0.1300, left 18,000
+TENDER #1120: SELL 5,000 @ est 24.8700, edge 0.1200, left 13,000
+TENDER #1120: SELL 5,000 @ est 24.8600, edge 0.1100, left 8,000
+TENDER #1120: SELL 5,000 @ est 24.8700, edge 0.1200, left 3,000
+TENDER #1120: SELL 3,000 @ est 24.8700, edge 0.1200, left 0
+TENDER #1120: unwind complete; price-protected quantity 78,000/78,000
+ARB scan tick=90: rich=-0.11046000000000046, cheap=-0.06035999999999998, open_threshold=0.220
+ARB scan tick=100: rich=-0.152679999999998, cheap=-0.019936000000002695, open_threshold=0.220
+TENDER accept #1620: side=BUY, quantity=91,000, sample_edge=0.110, full_edge=0.012, visible=100%
+TENDER #1620: submitted; tracking settlement for 10 ticks
+TENDER #1620: settled delta=+91,000; unwinding SELL 91,000
+TENDER #1620: SELL 5,000 @ est 24.9500, edge 0.0900, left 86,000
+TENDER #1620: SELL 5,000 @ est 24.9520, edge 0.0920, left 81,000
+TENDER #1620: SELL 5,000 @ est 24.9600, edge 0.1000, left 76,000
+TENDER #1620: SELL 5,000 @ est 24.9600, edge 0.1000, left 71,000
+TENDER #1620: SELL 5,000 @ est 24.9600, edge 0.1000, left 66,000
+TENDER #1620: SELL 5,000 @ est 24.9600, edge 0.1000, left 61,000
+TENDER #1620: SELL 5,000 @ est 24.9600, edge 0.1000, left 56,000
+TENDER #1620: SELL 5,000 @ est 24.9600, edge 0.1000, left 51,000
+TENDER #1620: SELL 5,000 @ est 24.9600, edge 0.1000, left 46,000
+TENDER #1620: SELL 5,000 @ est 24.9600, edge 0.1000, left 41,000
+TENDER #1620: SELL 5,000 @ est 24.9500, edge 0.0900, left 36,000
+TENDER #1620: SELL 5,000 @ est 24.9500, edge 0.0900, left 31,000
+TENDER #1620: SELL 5,000 @ est 24.8900, edge 0.0300, left 26,000
+TENDER #1620: SELL 5,000 @ est 24.8900, edge 0.0300, left 21,000
+TENDER #1620: 12.2s deadline; market-unwinding remaining 21,000
+TENDER #1620: unwind complete; price-protected quantity 70,000/91,000
+ARB scan tick=130: rich=-0.05208679999999785, cheap=-0.22919999999999693, open_threshold=0.220
+ARB scan tick=140: rich=-0.044924999999997724, cheap=-0.17976000000000197, open_threshold=0.220
+TENDER accept #2120: side=SELL, quantity=100,000, sample_edge=0.142, full_edge=0.130, visible=100%
+TENDER #2120: submitted; tracking settlement for 10 ticks
+TENDER #2120: settled delta=-100,000; unwinding BUY 100,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 95,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 90,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 85,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 80,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 75,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 70,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 65,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 60,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 55,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 50,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 45,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 40,000
+TENDER #2120: BUY 5,000 @ est 24.7310, edge 0.1490, left 35,000
+TENDER #2120: BUY 5,000 @ est 24.7473, edge 0.1327, left 30,000
+TENDER #2120: BUY 5,000 @ est 24.7340, edge 0.1460, left 25,000
+TENDER #2120: BUY 5,000 @ est 24.7600, edge 0.1200, left 20,000
+TENDER #2120: BUY 5,000 @ est 24.7513, edge 0.1287, left 15,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 10,000
+TENDER #2120: BUY 5,000 @ est 24.7400, edge 0.1400, left 5,000
+TENDER #2120: BUY 5,000 @ est 24.7520, edge 0.1280, left 0
+TENDER #2120: unwind complete; price-protected quantity 100,000/100,000
+ARB scan tick=160: rich=0.020801000000002692, cheap=-0.2818159999999988, open_threshold=0.220
+TENDER wait #2620: sample_edge=-0.08556737499999885, full_edge=-0.15865541428571467, visible=100%, expires=172
+TENDER wait #2620: sample_edge=-0.09186300000000029, full_edge=-0.1624763719780199, visible=100%, expires=172
+TENDER wait #2620: sample_edge=-0.10181138399999881, full_edge=-0.1782242525274744, visible=100%, expires=172
+TENDER wait #2620: sample_edge=-0.0913860000000003, full_edge=-0.12737021384615074, visible=100%, expires=172
+ARB scan tick=170: rich=-0.0737779999999981, cheap=-0.20699200000000403, open_threshold=0.220
+TENDER reject #2620: side=BUY, sample_edge=-0.08113599999999871, full_edge=-0.08113599999999871, visible=100%, limits_ok=True
+ARB scan tick=180: rich=-0.021592000000000208, cheap=-0.17887300000000134, open_threshold=0.220
+ARB scan tick=190: rich=-0.022526000000001004, cheap=-0.13131399999999976, open_threshold=0.220"""
