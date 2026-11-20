@@ -56,13 +56,14 @@ Useful overrides:
 ```bash
 python rit_vol_trader.py \
   --size 100 \
-  --edge 5 \
+  --edge 7 \
   --poll 0.5 \
   --vol 20
 ```
 
 - `--size`: requested option order size, from 1 to 100.
-- `--edge`: minimum estimated dollars per contract after immediate fees.
+- `--edge`: minimum estimated dollars per contract after immediate fees;
+  defaults to `$7`.
 - `--vol`: annualized volatility percentage; overrides news parsing.
 - `--dry-run`: logs orders without sending them.
 - `--key`: RIT API key; defaults to `RIT_API_KEY` or `Rotman`.

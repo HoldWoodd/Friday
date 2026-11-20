@@ -315,7 +315,7 @@ def main():
     parser.add_argument("--url", default="http://localhost:9999/v1")
     parser.add_argument("--key", default=os.getenv("RIT_API_KEY", "Rotman"))
     parser.add_argument("--size", type=int, default=OPT_ORDER)
-    parser.add_argument("--edge", type=float, default=5)
+    parser.add_argument("--edge", type=float, default=7)
     parser.add_argument("--vol", type=float)
     parser.add_argument("--poll", type=float, default=.5)
     parser.add_argument("--dry-run", dest="live", action="store_false")
