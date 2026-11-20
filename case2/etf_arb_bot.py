@@ -33,7 +33,7 @@ MAX_REASONABLE_ARB_EDGE_CAD = 2.00
 STOP_OPENING_AT_TICK = int(os.getenv("RIT_STOP_OPENING_AT_TICK", "270"))
 FORCE_CLOSE_AT_TICK = int(os.getenv("RIT_FORCE_CLOSE_AT_TICK", "285"))
 HEDGE_USD = os.getenv("RIT_HEDGE_USD", "0") == "1"
-ENABLE_BASKET_ARB = os.getenv("RIT_ENABLE_BASKET_ARB", "0") == "1"
+ENABLE_BASKET_ARB = os.getenv("RIT_ENABLE_BASKET_ARB", "1") == "1"
 MIN_VISIBLE_DEPTH_RATIO = 0.20
 UNSEEN_DEPTH_PENALTY = 0.03
 ETF_LIMIT_WEIGHT = 2.0
@@ -448,6 +448,11 @@ def run() -> None:
         wait_log_tick: dict[int, int] = {}
         last_status = None
         print(f"ETF arbitrage bot connected to {API_URL}")
+        print(
+            "Strategies: tender=ON, "
+            f"ETF-rich/ETF-cheap={'ON' if ENABLE_BASKET_ARB else 'OFF'}, "
+            f"USD-hedge={'ON' if HEDGE_USD else 'OFF'}"
+        )
         while True:
             try:
                 case = api(session, "GET", "/case")

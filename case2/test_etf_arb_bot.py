@@ -111,6 +111,14 @@ class StrategyTest(unittest.TestCase):
         self.assertGreater(rich, 0)
         self.assertLess(cheap, 0)
 
+    def test_detects_cheap_etf(self):
+        etf = Book((Level(19.40, 1000),), (Level(19.50, 1000),))
+        bull = Book((Level(10.00, 1000),), (Level(10.10, 1000),))
+        bear = Book((Level(15.00, 1000),), (Level(15.10, 1000),))
+        rich, cheap = basket_edges(etf, bull, bear, 1000, 1.25)
+        self.assertLess(rich, 0)
+        self.assertGreater(cheap, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

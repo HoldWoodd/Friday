@@ -72,9 +72,13 @@ python -m unittest -v
 和停止开仓 tick。不同 heat 的流动性不同，必须用 practice heat 调参。VWAP 只能
 反映下单前的显示盘口；三腿交易也不是原子成交，所以代码不能保证利润。
 
-根据多轮报告中 BULL/BEAR 腿持续亏损的结果，ETF 三腿套利开仓门槛已提高到
-0.35 CAD/份且默认关闭。如需实验性开启：
+ETF 三腿套利包含两个方向：RITC 偏贵时卖 RITC、买 BULL 和 BEAR；RITC 偏便宜
+时买 RITC、卖 BULL 和 BEAR。开仓门槛为 0.35 CAD/份，每次 2,000 份，当前默认
+开启。如需比赛时临时关闭：
 
 ```bash
-export RIT_ENABLE_BASKET_ARB=1
+export RIT_ENABLE_BASKET_ARB=0
 ```
+
+三腿订单不是原子成交，而且 Converter 只能手动操作，因此该策略的滑点风险高于
+Tender。程序会在启动时明确打印两类策略是否开启。
